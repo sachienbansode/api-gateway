@@ -1,0 +1,6 @@
+vendors:
+  - id: acme
+    name: Acme Logistics
+    keyEnv: [VENDOR_KEY_ACME]
+    enabled: true
+    scopes: [customers.read, shipments.write]

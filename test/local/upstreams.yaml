@@ -1,0 +1,5 @@
+upstreams:
+  internal_node:
+    baseUrl: http://127.0.0.1:9910
+    timeoutMs: 3000
+    auth: { type: bearer, token: "${INTERNAL_NODE_API_TOKEN}" }

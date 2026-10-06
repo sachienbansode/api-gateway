@@ -1,0 +1,23 @@
+endpoints:
+  - name: get_customer
+    path: /v1/customers/:customerId
+    method: GET
+    upstream: internal_node
+    upstreamPath: /api/customers/:customerId
+    scopes: [customers.read]
+    rateLimit: { windowMs: 60000, max: 500 }
+    response:
+      fields: [id, display_name, address.city, address.country]
+      rename: { display_name: name }
+  - name: create_shipment
+    path: /v1/shipments
+    method: POST
+    upstream: internal_node
+    upstreamPath: /api/shipments
+    scopes: [shipments.write]
+    rateLimit: { windowMs: 60000, max: 100 }
+    request:
+      body: [order_id, city]
+      inject: { source: vendor_api }
+    response:
+      fields: [shipment_id, state]
