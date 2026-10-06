@@ -1,0 +1,18 @@
+upstreams:
+  mock:
+    baseUrl: ${MOCK_UPSTREAM_URL}
+    timeoutMs: 1500
+    auth:
+      type: bearer
+      token: ${MOCK_UPSTREAM_TOKEN}
+    breaker:
+      failureThreshold: 2
+      resetMs: 30000
+
+  slow:
+    baseUrl: ${MOCK_UPSTREAM_URL}
+    timeoutMs: 250
+    auth:
+      type: header
+      name: X-Api-Key
+      value: ${MOCK_UPSTREAM_TOKEN}

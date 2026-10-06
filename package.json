@@ -1,0 +1,29 @@
+{
+  "name": "vendor-api-wrapper",
+  "version": "1.0.0",
+  "description": "Manifest-driven facade gateway that exposes a controlled subset of internal and third-party APIs to external vendors.",
+  "main": "src/server.js",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node --test test/*.test.js",
+    "validate": "node scripts/validate-config.js",
+    "genkey": "node scripts/genkey.js",
+    "openapi": "node scripts/dump-openapi.js",
+    "fields": "node scripts/fields-to-yaml.js",
+    "gw": "node scripts/gw.js",
+    "migrate": "node scripts/gw.js migrate",
+    "test:db": "node --test test/db.test.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "helmet": "^8.0.0",
+    "js-yaml": "^4.1.0",
+    "pg": "^8.23.0",
+    "pino": "^9.5.0"
+  }
+}

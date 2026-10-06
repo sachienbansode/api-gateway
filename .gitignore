@@ -1,0 +1,14 @@
+node_modules/
+.env
+*.log
+logs/
+coverage/
+.DS_Store
+
+# Field discovery snapshot. Contains field NAMES only, no values — safe to
+# commit if you prefer to track schema drift in git. Ignored by default because
+# it churns on every deploy.
+discovered-fields.json
+
+# Stale files moved aside, not part of the project
+_to_delete/

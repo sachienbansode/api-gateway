@@ -1,0 +1,41 @@
+# ---------------------------------------------------------------------------
+# VENDORS — who may call, and what they may reach.
+#
+# `keyEnv` names the environment variable holding the SHA-256 hash of that
+# vendor's API key. The plaintext key exists in exactly two places: the
+# vendor's own config, and the moment `npm run genkey` printed it. It is never
+# stored here, never logged, and cannot be recovered from this server.
+#
+# To rotate: run genkey again, add the new hash as a second env var in
+# `keyEnv` (it accepts a list), let the vendor cut over, then remove the old.
+# To revoke: delete the hash from .env and restart. Immediate.
+# ---------------------------------------------------------------------------
+
+vendors:
+
+  - id: acme
+    name: Acme Logistics Pvt Ltd
+    keyEnv: [VENDOR_KEY_ACME]
+    enabled: true
+    # Global ceiling across all endpoints for this vendor, on top of the
+    # per-endpoint limits in endpoints.yaml.
+    rateLimit: { windowMs: 60000, max: 600 }
+    scopes:
+      - customers.read
+      - orders.read
+      - shipments.write
+      - payments.read
+      - invoices.read
+      - reference.read
+
+  # A second vendor with a deliberately narrower surface — same gateway,
+  # different visible API. This is why scopes are worth having even with
+  # one vendor today.
+  - id: partner_b
+    name: Partner B
+    keyEnv: [VENDOR_KEY_PARTNER_B]
+    enabled: false
+    rateLimit: { windowMs: 60000, max: 120 }
+    scopes:
+      - orders.read
+      - geo.read

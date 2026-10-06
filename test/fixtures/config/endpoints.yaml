@@ -1,0 +1,116 @@
+endpoints:
+  - name: get_customer
+    path: /v1/customers/:customerId
+    method: GET
+    upstream: mock
+    upstreamPath: /internal/customers/:customerId
+    scopes: [customers.read]
+    rateLimit: { windowMs: 60000, max: 100 }
+    response:
+      fields:
+        - id
+        - display_name
+        - address.city
+      rename:
+        display_name: name
+
+  - name: list_customers
+    path: /v1/customers
+    method: GET
+    upstream: mock
+    upstreamPath: /internal/customers
+    scopes: [customers.read]
+    rateLimit: { windowMs: 60000, max: 100 }
+    request:
+      query: [page]
+      inject:
+        partner_scope: vendor
+    response:
+      fields:
+        - total
+        - items[].id
+        - items[].display_name
+
+  - name: create_shipment
+    path: /v1/shipments
+    method: POST
+    upstream: mock
+    upstreamPath: /internal/shipments
+    scopes: [shipments.write]
+    rateLimit: { windowMs: 60000, max: 50 }
+    request:
+      body: [order_id, city]
+      inject:
+        source: vendor_api
+        allow_manual_price: false
+    response:
+      fields:
+        - shipment_id
+        - state
+
+  - name: boom
+    path: /v1/boom
+    method: GET
+    upstream: mock
+    upstreamPath: /internal/boom
+    scopes: [customers.read]
+    rateLimit: { windowMs: 60000, max: 100 }
+    response:
+      fields: [ok]
+
+  - name: timeout_endpoint
+    path: /v1/slow
+    method: GET
+    upstream: slow
+    upstreamPath: /internal/slow
+    scopes: [customers.read]
+    rateLimit: { windowMs: 60000, max: 100 }
+    response:
+      fields: [ok]
+
+  # Deliberately tiny limit, used only by the rate-limit test so it does not
+  # have to share an allowance with every other test in the file.
+  - name: tight_limit
+    path: /v1/tight
+    method: GET
+    upstream: mock
+    upstreamPath: /internal/customers/1
+    scopes: [customers.read]
+    rateLimit: { windowMs: 60000, max: 2 }
+    response:
+      fields: [id]
+
+  - name: redacted_invoice
+    path: /v1/invoices/:invoiceId
+    method: GET
+    upstream: mock
+    upstreamPath: /internal/invoices/:invoiceId
+    scopes: [customers.read]
+    rateLimit: { windowMs: 60000, max: 100 }
+    response:
+      mode: redact
+      exclude:
+        - internal_margin
+        - cost_breakdown
+        - line_items[].unit_cost
+
+  - name: reference_passthrough
+    path: /v1/reference
+    method: GET
+    upstream: mock
+    upstreamPath: /internal/reference
+    scopes: [customers.read]
+    rateLimit: { windowMs: 60000, max: 100 }
+    response:
+      mode: passthrough
+      acknowledgeUnfiltered: true
+
+  - name: secret_endpoint
+    path: /v1/secret
+    method: GET
+    upstream: mock
+    upstreamPath: /internal/customers/1
+    scopes: [admin.read]
+    rateLimit: { windowMs: 60000, max: 100 }
+    response:
+      fields: [id]

@@ -1,0 +1,18 @@
+# ---------------------------------------------------------------------------
+# Housekeeping for the vendor API wrapper.
+#
+# Install as /etc/cron.d/vendor-api-wrapper (mode 0644, owned by root).
+# Without this, idempotency_keys and audit_log grow forever.
+# ---------------------------------------------------------------------------
+
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+
+# Every night at 03:17 (off the hour, so it does not collide with everything
+# else on the box): drop expired idempotency records and audit rows older than
+# 90 days. Adjust --audit-days to whatever your retention policy requires.
+17 3 * * * apigw cd /opt/vendor-api-wrapper && set -a && . /etc/vendor-api-wrapper/env && set +a && node scripts/gw.js purge --audit-days=90 >> /var/log/vendor-api-wrapper/purge.log 2>&1
+
+# Weekly: dump the discovered-fields report so you get a nudge to convert
+# redact/passthrough endpoints to strict whitelists.
+23 4 * * 1 apigw cd /opt/vendor-api-wrapper && set -a && . /etc/vendor-api-wrapper/env && set +a && node scripts/fields-to-yaml.js > /var/log/vendor-api-wrapper/discovered-fields.yaml 2>&1

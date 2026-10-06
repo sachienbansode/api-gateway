@@ -1,0 +1,45 @@
+# ---------------------------------------------------------------------------
+# UPSTREAMS — the real APIs. Nothing in this file is ever visible to a vendor.
+#
+# Each upstream declares where it lives and how WE authenticate to it.
+# Secrets are referenced as ${ENV_VAR} and resolved from the environment at
+# boot, so no credential is ever written to a config file or a repo.
+# ---------------------------------------------------------------------------
+
+upstreams:
+
+  # An internal Node.js service
+  internal_node:
+    baseUrl: http://10.0.1.14:3000
+    timeoutMs: 5000
+    auth:
+      type: bearer
+      token: ${INTERNAL_NODE_API_TOKEN}
+
+  # An internal Python/FastAPI service
+  internal_py:
+    baseUrl: http://10.0.1.22:8000
+    timeoutMs: 8000
+    auth:
+      type: header
+      name: X-API-Key
+      value: ${INTERNAL_PY_API_KEY}
+
+  # A third-party API you pay for and do NOT want the vendor calling directly
+  # (they would see your account, your quota, and your key).
+  thirdparty_payments:
+    baseUrl: https://api.payments-provider.example.com/v2
+    timeoutMs: 10000
+    auth:
+      type: basic
+      username: ${THIRDPARTY_PAYMENTS_KEY}
+      password: ${THIRDPARTY_PAYMENTS_SECRET}
+
+  # A third-party API that wants the key as a query parameter
+  thirdparty_geo:
+    baseUrl: https://geo.example.com
+    timeoutMs: 6000
+    auth:
+      type: query
+      name: apikey
+      value: ${THIRDPARTY_GEO_KEY}

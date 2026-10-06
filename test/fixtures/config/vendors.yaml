@@ -1,0 +1,25 @@
+vendors:
+  - id: acme
+    name: Acme Test Vendor
+    keyEnv: [VENDOR_KEY_ACME]
+    enabled: true
+    rateLimit: { windowMs: 60000, max: 1000 }
+    scopes:
+      - customers.read
+      - shipments.write
+
+  - id: narrow
+    name: Narrow Vendor
+    keyEnv: [VENDOR_KEY_NARROW]
+    enabled: true
+    rateLimit: { windowMs: 60000, max: 1000 }
+    scopes:
+      - customers.read
+
+  - id: unused_admin
+    name: Admin scope holder
+    keyEnv: [VENDOR_KEY_ADMIN]
+    enabled: true
+    rateLimit: { windowMs: 60000, max: 1000 }
+    scopes:
+      - admin.read

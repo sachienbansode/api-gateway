@@ -1,0 +1,238 @@
+# ---------------------------------------------------------------------------
+# ENDPOINTS — the vendor-facing surface. This is an ALLOWLIST.
+#
+# If an endpoint is not declared here, the vendor cannot reach it. There is no
+# catch-all passthrough anywhere in this gateway, by design: a generic proxy
+# would let a vendor reach any upstream path they can guess, which defeats the
+# entire point of putting a wrapper in front.
+#
+# Per endpoint you declare:
+#   path            vendor-facing route. Use YOUR OWN naming — do not mirror
+#                   upstream paths, or upstream structure becomes inferable.
+#   method          GET | POST | PUT | PATCH | DELETE
+#   upstream        which entry in upstreams.yaml to call
+#   upstreamPath    real path on that upstream. :params are substituted from
+#                   the vendor-facing path params.
+#   upstreamMethod  optional; defaults to `method`
+#   scopes          vendor must hold one of these scopes (see vendors.yaml)
+#   rateLimit       per-vendor-key limit for THIS endpoint
+#   request:
+#     query         allowlist of query params forwarded upstream
+#     body          allowlist of body fields forwarded upstream
+#     inject        fixed values we force upstream regardless of vendor input
+#   response:
+#     mode          whitelist (default) | redact | passthrough — see below
+#     fields        WHITELIST of fields returned, for mode: whitelist.
+#                   Dotted paths for nesting, `[]` to map across an array.
+#     exclude       fields to DROP, for mode: redact.
+#     rename        optional output renaming (whitelist mode only), to further
+#                   decouple your contract from the upstream schema
+#     discover      record which field paths the upstream actually returns
+#                   (names only, never values). Defaults ON for redact and
+#                   passthrough, OFF for whitelist.
+#
+# ---------------------------------------------------------------------------
+# THE THREE RESPONSE MODES
+#
+#   mode: whitelist   (default, and the only one immune to upstream change)
+#       Emit only the named fields. The response is built from nothing, so a
+#       column added upstream next sprint CANNOT appear. Use this wherever you
+#       can.
+#
+#   mode: redact      (passthrough, minus known-sensitive fields)
+#       Forward everything except `exclude`. Useful when you must ship today and
+#       you know which few fields must not leave. Understand the cost: this does
+#       NOT protect you against upstream adding a field. Discovery is on by
+#       default so you get a warning the first time a new field appears, and so
+#       `npm run fields` can convert this to a whitelist later.
+#
+#   mode: passthrough (nothing is filtered)
+#       Forward the body verbatim. Requires `acknowledgeUnfiltered: true` so the
+#       decision is visible in a code review and in `npm run validate`. Use for
+#       an endpoint whose upstream you fully control and whose response contains
+#       nothing you would mind the vendor seeing.
+#
+# Migration path, which is the intended way to use this: ship in redact, let
+# real traffic flow, run `npm run fields` to see what the upstream actually
+# returns, uncomment the fields the vendor should get, switch to whitelist.
+# ---------------------------------------------------------------------------
+
+endpoints:
+
+  # -------------------------------------------------------------------------
+  # 1. Customer lookup — internal Node service.
+  #    Upstream returns internal_notes, credit_score, created_by_user_id and
+  #    an internal cost field. The vendor sees none of that.
+  # -------------------------------------------------------------------------
+  - name: get_customer
+    path: /v1/customers/:customerId
+    method: GET
+    upstream: internal_node
+    upstreamPath: /api/internal/customer-records/:customerId
+    scopes: [customers.read]
+    rateLimit: { windowMs: 60000, max: 120 }
+    request:
+      query: []
+    response:
+      fields:
+        - id
+        - display_name
+        - status
+        - address.city
+        - address.country
+        - address.postal_code
+      rename:
+        display_name: name
+
+  # -------------------------------------------------------------------------
+  # 2. Customer list — array response. Note the `[]` syntax to project
+  #    across every element.
+  # -------------------------------------------------------------------------
+  - name: list_customers
+    path: /v1/customers
+    method: GET
+    upstream: internal_node
+    upstreamPath: /api/internal/customer-records
+    scopes: [customers.read]
+    rateLimit: { windowMs: 60000, max: 60 }
+    request:
+      query: [page, page_size, status]
+      inject:
+        # Force the vendor to only ever see this partner's own records,
+        # whatever they ask for. Vendor cannot override an injected value.
+        partner_scope: vendor
+    response:
+      fields:
+        - page
+        - page_size
+        - total
+        - items[].id
+        - items[].display_name
+        - items[].status
+      rename:
+        items[].display_name: items[].name
+
+  # -------------------------------------------------------------------------
+  # 3. Order status — internal Python service.
+  # -------------------------------------------------------------------------
+  - name: get_order_status
+    path: /v1/orders/:orderId/status
+    method: GET
+    upstream: internal_py
+    upstreamPath: /orders/:orderId
+    scopes: [orders.read]
+    rateLimit: { windowMs: 60000, max: 300 }
+    response:
+      fields:
+        - order_id
+        - state
+        - updated_at
+        - shipment.carrier
+        - shipment.tracking_number
+        - shipment.eta
+
+  # -------------------------------------------------------------------------
+  # 4. Create a shipment request — write endpoint. Body is allowlisted, so a
+  #    vendor cannot smuggle extra fields (e.g. `price_override`) upstream.
+  # -------------------------------------------------------------------------
+  - name: create_shipment
+    path: /v1/shipments
+    method: POST
+    upstream: internal_py
+    upstreamPath: /shipments
+    upstreamMethod: POST
+    scopes: [shipments.write]
+    rateLimit: { windowMs: 60000, max: 30 }
+    request:
+      body: [order_id, recipient_name, address_line1, address_line2, city, postal_code, country, weight_grams]
+      inject:
+        source: vendor_api
+        allow_manual_price: false
+    response:
+      fields:
+        - shipment_id
+        - state
+        - label_url
+
+  # -------------------------------------------------------------------------
+  # 5. Third-party payment status — you own the provider account and key.
+  #    The vendor gets an answer without ever seeing the provider, the
+  #    endpoint, or your credentials.
+  # -------------------------------------------------------------------------
+  - name: get_payment_status
+    path: /v1/payments/:paymentRef
+    method: GET
+    upstream: thirdparty_payments
+    upstreamPath: /charges/:paymentRef
+    scopes: [payments.read]
+    rateLimit: { windowMs: 60000, max: 60 }
+    response:
+      fields:
+        - id
+        - status
+        - amount
+        - currency
+      rename:
+        id: payment_ref
+
+  # -------------------------------------------------------------------------
+  # 6. Third-party geo lookup, key injected as a query param upstream.
+  # -------------------------------------------------------------------------
+  - name: geocode
+    path: /v1/geocode
+    method: GET
+    upstream: thirdparty_geo
+    upstreamPath: /v1/search
+    scopes: [geo.read]
+    rateLimit: { windowMs: 60000, max: 100 }
+    request:
+      query: [q, country]
+    response:
+      fields:
+        - results[].formatted
+        - results[].lat
+        - results[].lon
+
+  # -------------------------------------------------------------------------
+  # 7. REDACT MODE — phase-1 pattern.
+  #
+  #    You need this endpoint live today, you don't yet have a full list of what
+  #    the upstream returns, but you know three fields that must not leave.
+  #    Forward everything else, drop those, and let discovery tell you what is
+  #    actually flowing so you can tighten it to a whitelist next week.
+  # -------------------------------------------------------------------------
+  - name: get_invoice
+    path: /v1/invoices/:invoiceId
+    method: GET
+    upstream: internal_node
+    upstreamPath: /api/internal/invoices/:invoiceId
+    scopes: [invoices.read]
+    rateLimit: { windowMs: 60000, max: 120 }
+    response:
+      mode: redact
+      exclude:
+        - internal_margin
+        - cost_breakdown          # drops the whole nested object
+        - created_by_user_id
+        - line_items[].unit_cost  # drops one field from every array element
+      # discover: true is implied by redact mode
+
+  # -------------------------------------------------------------------------
+  # 8. PASSTHROUGH MODE — use sparingly, and only where you control the
+  #    upstream and its whole response is safe to share. The explicit
+  #    acknowledgement is required so nobody adds this by accident.
+  # -------------------------------------------------------------------------
+  - name: get_reference_data
+    path: /v1/reference/countries
+    method: GET
+    upstream: internal_node
+    upstreamPath: /api/internal/reference/countries
+    scopes: [reference.read]
+    rateLimit: { windowMs: 60000, max: 30 }
+    response:
+      mode: passthrough
+      acknowledgeUnfiltered: true
+
+  # -------------------------------------------------------------------------
+  # Endpoints 9..N — copy a block, change six lines. No code change needed.
+  # -------------------------------------------------------------------------

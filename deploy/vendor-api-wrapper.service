@@ -1,0 +1,72 @@
+[Unit]
+Description=Vendor API Wrapper Gateway
+Documentation=https://github.com/your-org/vendor-api-wrapper
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=apigw
+Group=apigw
+WorkingDirectory=/opt/vendor-api-wrapper
+ExecStart=/usr/bin/node src/server.js
+
+# Config and secrets. Mode 0600, owned by apigw. Never in the git repo.
+EnvironmentFile=/etc/vendor-api-wrapper/env
+
+# Bind to loopback only — nginx terminates TLS and is the single public door.
+Environment=BIND_HOST=127.0.0.1
+Environment=PORT=8080
+Environment=NODE_ENV=production
+Environment=TRUST_PROXY=1
+
+Restart=always
+RestartSec=2
+# If it crash-loops, stop trying and leave it down so the alert is unambiguous.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=vendor-api-wrapper
+
+# ---------------------------------------------------------------------------
+# Hardening. This process holds credentials to every internal and third-party
+# API you own, and it is the one process on the box that an outside party can
+# talk to. Lock it down accordingly.
+# ---------------------------------------------------------------------------
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+# Only the address families we actually use.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
+
+# Nothing on disk needs writing except the log dir and the discovery snapshot.
+ReadWritePaths=/var/log/vendor-api-wrapper /var/lib/vendor-api-wrapper
+
+LimitNOFILE=8192
+MemoryMax=512M
+TasksMax=256
+
+[Install]
+WantedBy=multi-user.target
