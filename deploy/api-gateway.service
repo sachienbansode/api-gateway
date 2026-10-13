@@ -54,7 +54,20 @@ RestrictSUIDSGID=yes
 RestrictNamespaces=yes
 RestrictRealtime=yes
 LockPersonality=yes
-MemoryDenyWriteExecute=yes
+# MemoryDenyWriteExecute is deliberately NOT set.
+#
+# It forbids a mapping from becoming both writable and executable, which is a
+# strong defence against injected shellcode — and completely incompatible with
+# a JIT. V8 compiles JavaScript to machine code at runtime, so every Node
+# process allocates executable pages. With this on, Node dies at startup with
+# SIGTRAP (status=5/TRAP) inside
+# v8::internal::Factory::CodeBuilder::AllocateUninitializedInstructionStream,
+# which reads like a Node bug and is not one.
+#
+# Verified: with the equivalent kernel restriction applied, mprotect(W->X) is
+# refused outright.
+#
+# MemoryDenyWriteExecute=yes   # <-- do not enable: it kills Node
 RemoveIPC=yes
 # Only the address families we actually use.
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
