@@ -95,8 +95,38 @@ ok "installed exactly what package-lock.json pins"
 # report. A missing credential or a malformed whitelist dies here.
 # ---------------------------------------------------------------------------
 bold "Config"
-set -a; # shellcheck disable=SC1090
-source "$ENV_FILE"; set +a
+
+# Load the env file the way SYSTEMD does, not the way bash does.
+#
+# systemd's EnvironmentFile takes `API_TITLE=Partner API` literally. `source`
+# in bash reads the same line as "run the command API with API_TITLE=Partner
+# set in its environment" and fails with "API: command not found". Sourcing
+# would also execute anything in the file, which is not what an env file is.
+#
+# So parse it: split on the first '=', keep the rest verbatim, strip one layer
+# of surrounding quotes if present, and skip anything that is not a valid
+# variable assignment.
+load_env() {
+  local line key val
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%$'\r'}"                       # tolerate CRLF
+    [[ -z "${line//[[:space:]]/}" ]] && continue
+    [[ "${line#"${line%%[![:space:]]*}"}" == \#* ]] && continue
+    [[ "$line" != *=* ]] && continue
+    key="${line%%=*}"
+    val="${line#*=}"
+    key="${key//[[:space:]]/}"
+    [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+    if [[ ${#val} -ge 2 && "${val:0:1}" == '"' && "${val: -1}" == '"' ]]; then
+      val="${val:1:${#val}-2}"
+    elif [[ ${#val} -ge 2 && "${val:0:1}" == "'" && "${val: -1}" == "'" ]]; then
+      val="${val:1:${#val}-2}"
+    fi
+    export "$key=$val"
+  done < "$1"
+}
+load_env "$ENV_FILE"
+ok "loaded $(grep -cE '^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=' "$ENV_FILE") settings from $ENV_FILE"
 
 npm run validate --silent || die "config validation failed — the running service was NOT restarted"
 ok "manifests parse and every credential resolves"
