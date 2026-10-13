@@ -9,11 +9,11 @@
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
-APP_DIR=/opt/vendor-api-wrapper
-CFG_DIR=/etc/vendor-api-wrapper
-LOG_DIR=/var/log/vendor-api-wrapper
-STATE_DIR=/var/lib/vendor-api-wrapper
-SVC=vendor-api-wrapper
+APP_DIR=/var/apps/api-gateway
+CFG_DIR=/etc/api-gateway
+LOG_DIR=/var/log/api-gateway
+STATE_DIR=/var/lib/api-gateway
+SVC=api-gateway
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 echo "==> Installing Node.js 22 if absent"
@@ -29,10 +29,21 @@ id -u apigw >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sb
 echo "==> Laying out directories"
 mkdir -p "$APP_DIR" "$CFG_DIR" "$LOG_DIR" "$STATE_DIR"
 
-echo "==> Copying application"
-rsync -a --delete \
-  --exclude node_modules --exclude .git --exclude .env --exclude test \
-  "$SRC_DIR"/ "$APP_DIR"/
+# The normal case is that you cloned straight into $APP_DIR, so the repo IS
+# the deployment and there is nothing to copy. `git pull && deploy.sh` then
+# works in one directory, which is the whole point.
+#
+# Copying only happens if you staged the source somewhere else. The guard
+# matters: rsync --delete with the source and destination equal would walk the
+# tree deleting as it goes.
+if [[ "$SRC_DIR" == "$APP_DIR" ]]; then
+  echo "==> Application is already in place at $APP_DIR (in-place install)"
+else
+  echo "==> Copying application from $SRC_DIR"
+  rsync -a --delete \
+    --exclude node_modules --exclude .git --exclude .env --exclude test \
+    "$SRC_DIR"/ "$APP_DIR"/
+fi
 
 echo "==> Installing production dependencies"
 cd "$APP_DIR"

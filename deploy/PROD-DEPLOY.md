@@ -113,14 +113,14 @@ ssh <admin-user>@<VM-PUBLIC-IP>
 
 ```bash
 sudo apt-get update && sudo apt-get install -y git nginx
-sudo mkdir -p /var/apps && cd /var/apps
-sudo git clone https://github.com/sachienbansode/api-gateway.git vendor-api-wrapper
-cd vendor-api-wrapper
+cd /var/apps
+sudo git clone https://github.com/sachienbansode/api-gateway.git api-gateway
+cd api-gateway
 sudo bash deploy/install.sh
 ```
 
 ⚠ `install.sh` downloads the **Azure** DigiCert root to
-`/etc/vendor-api-wrapper/azure-root.pem`. Your database is not on Azure, so
+`/etc/api-gateway/azure-root.pem`. Your database is not on Azure, so
 **do not set `DB_CA_CERT_PATH` to it** — the connection would fail verification
 against the wrong authority. Either:
 
@@ -158,7 +158,7 @@ listening on that interface. Only an immediate `succeeded` is good.
 ## 5. Configure
 
 ```bash
-sudoedit /etc/vendor-api-wrapper/env
+sudoedit /etc/api-gateway/env
 ```
 
 ```bash
@@ -206,7 +206,7 @@ platform.
 Generate the break-glass hash on the VM:
 
 ```bash
-cd /var/apps/vendor-api-wrapper
+cd /var/apps/api-gateway
 node scripts/gw.js admin:hash      # reads the password from stdin, never argv
 ```
 
@@ -215,8 +215,8 @@ node scripts/gw.js admin:hash      # reads the password from stdin, never argv
 ## 6. Verify — in this order
 
 ```bash
-cd /var/apps/vendor-api-wrapper
-set -a && . /etc/vendor-api-wrapper/env && set +a
+cd /var/apps/api-gateway
+set -a && . /etc/api-gateway/env && set +a
 
 node scripts/gw.js migrate:status     # expect: 001_init.sql applied, Pending (none)
 node scripts/gw.js db:check
@@ -239,9 +239,9 @@ the request path before the vendor is live.
 Then start it:
 
 ```bash
-sudo systemctl enable --now vendor-api-wrapper
-sudo systemctl status vendor-api-wrapper --no-pager
-journalctl -u vendor-api-wrapper -n 40 --no-pager
+sudo systemctl enable --now api-gateway
+sudo systemctl status api-gateway --no-pager
+journalctl -u api-gateway -n 40 --no-pager
 curl -s localhost:8080/readyz | jq .
 ```
 
@@ -255,9 +255,9 @@ the `database`, `upstreams` and `audit` keys in its body rather than restarting.
 DNS must resolve to the VM **before** certbot runs, or issuance fails.
 
 ```bash
-sudo cp deploy/nginx.conf /etc/nginx/sites-available/vendor-api-wrapper
-sudo ln -sf /etc/nginx/sites-available/vendor-api-wrapper /etc/nginx/sites-enabled/
-sudoedit /etc/nginx/sites-available/vendor-api-wrapper    # set server_name
+sudo cp deploy/nginx.conf /etc/nginx/sites-available/api-gateway
+sudo ln -sf /etc/nginx/sites-available/api-gateway /etc/nginx/sites-enabled/
+sudoedit /etc/nginx/sites-available/api-gateway    # set server_name
 sudo certbot --nginx -d partner-api.yourdomain.com
 sudo nginx -t && sudo systemctl reload nginx
 ```
@@ -281,12 +281,12 @@ az network nsg rule show -g $RG --nsg-name $NSG -n allow-vendor-https -o table
 ## 9. Redeploying later
 
 ```bash
-cd /var/apps/vendor-api-wrapper
+cd /var/apps/api-gateway
 git fetch origin                      # BEFORE reset — a stale cached ref has bitten this team repeatedly
 git reset --hard origin/main
 npm ci --omit=dev
-sudo systemctl restart vendor-api-wrapper
-journalctl -u vendor-api-wrapper -n 20 --no-pager
+sudo systemctl restart api-gateway
+journalctl -u api-gateway -n 20 --no-pager
 ```
 
 `npm ci`, never `npm install`: it installs exactly what `package-lock.json`
@@ -298,11 +298,11 @@ dependency resolving to something untested is not acceptable.
 ## Rollback
 
 ```bash
-cd /var/apps/vendor-api-wrapper
+cd /var/apps/api-gateway
 git log --oneline -5
 git reset --hard <previous-sha>
 npm ci --omit=dev
-sudo systemctl restart vendor-api-wrapper
+sudo systemctl restart api-gateway
 ```
 
 The database needs no rollback: every migration is additive and guarded with

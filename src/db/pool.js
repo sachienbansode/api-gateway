@@ -109,7 +109,7 @@ function init(logger, { forMigration = false } = {}) {
     // query can starve the pool and take the gateway down with it.
     statement_timeout: Number(process.env.DB_STATEMENT_TIMEOUT_MS) || 5000,
     query_timeout: Number(process.env.DB_QUERY_TIMEOUT_MS) || 5000,
-    application_name: 'vendor-api-wrapper',
+    application_name: 'api-gateway',
   });
 
   // An idle client erroring (network blip, Azure maintenance failover) must not

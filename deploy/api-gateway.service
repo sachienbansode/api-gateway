@@ -1,6 +1,6 @@
 [Unit]
 Description=Vendor API Wrapper Gateway
-Documentation=https://github.com/your-org/vendor-api-wrapper
+Documentation=https://github.com/your-org/api-gateway
 After=network-online.target
 Wants=network-online.target
 
@@ -8,11 +8,11 @@ Wants=network-online.target
 Type=simple
 User=apigw
 Group=apigw
-WorkingDirectory=/opt/vendor-api-wrapper
+WorkingDirectory=/var/apps/api-gateway
 ExecStart=/usr/bin/node src/server.js
 
 # Config and secrets. Mode 0600, owned by apigw. Never in the git repo.
-EnvironmentFile=/etc/vendor-api-wrapper/env
+EnvironmentFile=/etc/api-gateway/env
 
 # Bind to loopback only — nginx terminates TLS and is the single public door.
 Environment=BIND_HOST=127.0.0.1
@@ -28,7 +28,7 @@ StartLimitBurst=5
 
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=vendor-api-wrapper
+SyslogIdentifier=api-gateway
 
 # ---------------------------------------------------------------------------
 # Hardening. This process holds credentials to every internal and third-party
@@ -62,7 +62,7 @@ AmbientCapabilities=
 UMask=0077
 
 # Nothing on disk needs writing except the log dir and the discovery snapshot.
-ReadWritePaths=/var/log/vendor-api-wrapper /var/lib/vendor-api-wrapper
+ReadWritePaths=/var/log/api-gateway /var/lib/api-gateway
 
 LimitNOFILE=8192
 MemoryMax=512M

@@ -41,7 +41,7 @@ Right-click **Servers → Register → Server**:
 - **Parameters → SSL mode:** `require` ← **must set this**, Azure rejects
   plaintext. For full verification set `verify-full` and point **Root
   certificate** at the DigiCert root (`install.sh` downloads it to
-  `/etc/vendor-api-wrapper/azure-root.pem`).
+  `/etc/api-gateway/azure-root.pem`).
 
 If it hangs then times out rather than refusing, it's the **firewall**, not
 pgAdmin — add your client IP under *Networking → Firewall rules* on the Postgres

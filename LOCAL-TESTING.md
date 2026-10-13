@@ -160,7 +160,7 @@ node test/local/mock-upstream.js
 npm start
 ```
 
-Expected last line: `vendor-api-wrapper listening`, with `endpoints: 2` and
+Expected last line: `api-gateway listening`, with `endpoints: 2` and
 `vendorStore: database`.
 
 ---

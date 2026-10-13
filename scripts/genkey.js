@@ -44,7 +44,7 @@ console.log(`
         enabled: true
         scopes: [ ... ]
 
- 4. Restart the service:  sudo systemctl restart vendor-api-wrapper
+ 4. Restart the service:  sudo systemctl restart api-gateway
 
  To rotate later: run this again, add the NEW hash alongside the old in
  keyEnv, let the vendor cut over, then remove the old hash and restart.

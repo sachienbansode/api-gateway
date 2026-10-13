@@ -119,14 +119,14 @@ sudo bash deploy/install.sh
 ```
 
 Creates the `apigw` service account, installs production dependencies, lays out
-`/opt/vendor-api-wrapper`, `/etc/vendor-api-wrapper`,
-`/var/log/vendor-api-wrapper`, `/var/lib/vendor-api-wrapper`, downloads the
+`/var/apps/api-gateway`, `/etc/api-gateway`,
+`/var/log/api-gateway`, `/var/lib/api-gateway`, downloads the
 Azure root certificate, and installs the systemd unit and the housekeeping cron.
 
 ### 2.2 Configure
 
 ```bash
-sudoedit /etc/vendor-api-wrapper/env
+sudoedit /etc/api-gateway/env
 ```
 
 The two connection strings are deliberately different:
@@ -136,7 +136,7 @@ The two connection strings are deliberately different:
 DATABASE_URL=postgresql://gw_app:PASSWORD-2@YOURSERVER.postgres.database.azure.com:5432/gateway?sslmode=require
 
 # Verify TLS properly rather than trusting the VM's CA bundle.
-DB_CA_CERT_PATH=/etc/vendor-api-wrapper/azure-root.pem
+DB_CA_CERT_PATH=/etc/api-gateway/azure-root.pem
 
 # Migrations run as the OWNER. Do NOT put this in the VM env file — pass it on
 # the command line when migrating, or set it in your deploy pipeline only.
@@ -152,8 +152,8 @@ Then your upstream credentials (`INTERNAL_NODE_API_TOKEN`, etc.). An unresolved
 ### 2.3 Create the schema, then verify the privileges
 
 ```bash
-cd /opt/vendor-api-wrapper
-set -a && . /etc/vendor-api-wrapper/env && set +a
+cd /var/apps/api-gateway
+set -a && . /etc/api-gateway/env && set +a
 
 # As the owner — note the URL is supplied here, not stored in the env file.
 MIGRATION_DATABASE_URL='postgresql://gw_owner:PASSWORD-1@...:5432/gateway?sslmode=require' \
@@ -193,8 +193,8 @@ further.
 This is the part only you can do.
 
 ```bash
-sudoedit /opt/vendor-api-wrapper/config/upstreams.yaml   # your real hosts
-sudoedit /opt/vendor-api-wrapper/config/endpoints.yaml   # the vendor contract
+sudoedit /var/apps/api-gateway/config/upstreams.yaml   # your real hosts
+sudoedit /var/apps/api-gateway/config/endpoints.yaml   # the vendor contract
 ```
 
 For each endpoint decide the response mode:
@@ -227,9 +227,9 @@ lost, issue a new one and revoke the old.
 ### 2.6 Start
 
 ```bash
-sudo systemctl start vendor-api-wrapper
-sudo systemctl status vendor-api-wrapper
-journalctl -u vendor-api-wrapper -f
+sudo systemctl start api-gateway
+sudo systemctl status api-gateway
+journalctl -u api-gateway -f
 
 curl -s localhost:8080/readyz | jq
 ```
@@ -240,9 +240,9 @@ curl -s localhost:8080/readyz | jq
 ### 2.7 TLS and the public door
 
 ```bash
-sudo cp deploy/nginx.conf /etc/nginx/sites-available/vendor-api-wrapper
-sudo ln -sf /etc/nginx/sites-available/vendor-api-wrapper /etc/nginx/sites-enabled/
-sudoedit /etc/nginx/sites-available/vendor-api-wrapper    # set server_name
+sudo cp deploy/nginx.conf /etc/nginx/sites-available/api-gateway
+sudo ln -sf /etc/nginx/sites-available/api-gateway /etc/nginx/sites-enabled/
+sudoedit /etc/nginx/sites-available/api-gateway    # set server_name
 sudo certbot --nginx -d partner-api.yourdomain.com
 sudo nginx -t && sudo systemctl reload nginx
 ```
@@ -290,7 +290,7 @@ Tell them:
 ```bash
 node scripts/gw.js usage acme --since=1
 node scripts/gw.js audit:trace <requestId>
-journalctl -u vendor-api-wrapper -f | grep -i 'never seen before'
+journalctl -u api-gateway -f | grep -i 'never seen before'
 ```
 
 That last one matters if you shipped anything in `redact` or `passthrough` mode:
@@ -372,7 +372,7 @@ It keeps your test traffic out of the real vendor's quota and audit history, and
 node scripts/gw.js usage acme --since=1
 
 # New upstream fields reaching the vendor (matters if anything is in redact mode)
-journalctl -u vendor-api-wrapper -f | grep -i 'never seen before'
+journalctl -u api-gateway -f | grep -i 'never seen before'
 
 # Is the gateway healthy
 watch -n 60 'curl -s localhost:8080/readyz | jq "{ok, database: .database.ok, dropped: .audit.dropped}"'
@@ -420,7 +420,7 @@ Not optional, just not blocking today:
       them, but only the upstream can enforce row-level access — this gateway
       cannot do that on your behalf
 - [ ] Decide audit retention and set `--audit-days` in
-      `/etc/cron.d/vendor-api-wrapper` to match
+      `/etc/cron.d/api-gateway` to match
 - [ ] Alerting on `readyz` returning 503 and on `audit.dropped > 0`
 - [ ] Put the source in git. It is the change-review mechanism the whole
       config-as-code design depends on

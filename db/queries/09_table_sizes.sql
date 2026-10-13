@@ -10,7 +10,7 @@ SELECT relname                                            AS table,
 
 
 -- ⚠ Retention check. If `oldest_row` is older than your configured
--- --audit-days, the nightly purge in /etc/cron.d/vendor-api-wrapper is not
+-- --audit-days, the nightly purge in /etc/cron.d/api-gateway is not
 -- running. Audit and idempotency tables grow forever without it.
 SELECT min(occurred_at)                                     AS oldest_row,
        max(occurred_at)                                     AS newest_row,

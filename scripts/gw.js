@@ -123,7 +123,7 @@ const commands = {
 
     const hash = await bcrypt.hash(pw, rounds);
     console.log(`
-  Add these to /etc/vendor-api-wrapper/env:
+  Add these to /etc/api-gateway/env:
 
     SUPERADMIN_ENABLED=true
     SUPERADMIN_EMAIL=you@yourcompany.com

@@ -28,7 +28,7 @@ const logger = pino(
   {
     level: process.env.LOG_LEVEL || 'info',
     redact: { paths: REDACT, censor: '[redacted]' },
-    base: { svc: 'vendor-api-wrapper' },
+    base: { svc: 'api-gateway' },
     timestamp: pino.stdTimeFunctions.isoTime,
   },
   dest

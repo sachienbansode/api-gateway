@@ -94,9 +94,9 @@ db/                  ALL SQL lives here
 deploy/
   install.sh         first-time VM setup
   RUNBOOK.md         ordered path from Azure portal to first vendor call
-  vendor-api-wrapper.service   hardened systemd unit
+  api-gateway.service   hardened systemd unit
   nginx.conf         TLS termination, IP allowlist, edge rate limiting
-  vendor-api-wrapper.cron  nightly retention + discovery report
+  api-gateway.cron  nightly retention + discovery report
 test/                87 tests (61 without a DB, 26 against real Postgres)
 ```
 
@@ -327,7 +327,7 @@ infrastructure meanwhile. Vendors get `X-Quota-Limit`, `X-Quota-Used`,
 
 ### Housekeeping
 
-`deploy/vendor-api-wrapper.cron` runs nightly. Without it, `audit_log` and
+`deploy/api-gateway.cron` runs nightly. Without it, `audit_log` and
 `idempotency_keys` grow forever.
 
 ```bash
@@ -516,8 +516,8 @@ accidentally write one to disk. Rejected keys log the first six characters of th
 *digest* — enough to distinguish "same wrong key repeatedly" from credential
 stuffing, without writing any part of a real secret anywhere.
 
-Goes to journald by default (`journalctl -u vendor-api-wrapper -f`). Set
-`AUDIT_LOG=/var/log/vendor-api-wrapper/audit.log` for a file sink.
+Goes to journald by default (`journalctl -u api-gateway -f`). Set
+`AUDIT_LOG=/var/log/api-gateway/audit.log` for a file sink.
 
 ---
 
@@ -561,7 +561,7 @@ calling vendor's scopes.
 sudo bash deploy/install.sh
 ```
 
-Then follow the printed steps. In summary: fill `/etc/vendor-api-wrapper/env`,
+Then follow the printed steps. In summary: fill `/etc/api-gateway/env`,
 point `upstreams.yaml` at your real hosts, `npm run validate`, start the service,
 install the nginx config, run certbot, and lock the NSG to the vendor's IPs.
 

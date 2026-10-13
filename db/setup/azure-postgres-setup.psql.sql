@@ -173,7 +173,7 @@ ALTER ROLE gw_owner IN DATABASE gateway SET search_path = gateway;
 \echo '  Migrations (deploy pipeline / by hand — NOT stored on the VM):'
 \echo '    MIGRATION_DATABASE_URL=postgresql://gw_owner:PW1@SERVER.postgres.database.azure.com:5432/gateway?sslmode=require'
 \echo ''
-\echo '  The running gateway (this is what goes in /etc/vendor-api-wrapper/env):'
+\echo '  The running gateway (this is what goes in /etc/api-gateway/env):'
 \echo '    DATABASE_URL=postgresql://gw_app:PW2@SERVER.postgres.database.azure.com:5432/gateway?sslmode=require'
 \echo ''
 \echo '  Next:  npm run migrate     (uses MIGRATION_DATABASE_URL if set)'

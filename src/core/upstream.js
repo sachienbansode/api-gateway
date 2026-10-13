@@ -21,7 +21,7 @@ const errors = require('./errors');
 function buildUpstreamHeaders(upstream, { requestId, hasBody }) {
   const headers = {
     accept: 'application/json',
-    'user-agent': 'vendor-api-wrapper/1.0',
+    'user-agent': 'api-gateway/1.0',
     // Lets your internal services correlate a call with the gateway audit log.
     'x-gateway-request-id': requestId,
   };

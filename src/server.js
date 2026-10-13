@@ -55,7 +55,7 @@ async function start() {
         vendorStore: built.vendorStore.snapshot(),
         upstreams: Object.keys(config.upstreams),
       },
-      'vendor-api-wrapper listening'
+      'api-gateway listening'
     );
   });
 

@@ -1,5 +1,5 @@
 {
-  "name": "vendor-api-wrapper",
+  "name": "api-gateway",
   "version": "1.0.0",
   "description": "Manifest-driven facade gateway that exposes a controlled subset of internal and third-party APIs to external vendors.",
   "main": "src/server.js",
