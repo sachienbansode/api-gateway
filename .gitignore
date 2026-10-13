@@ -1,5 +1,10 @@
 node_modules/
+
+# Secrets. `.env` alone does NOT match `.env.backup-...` or `.env.prod`, so
+# match the whole family and re-include the committed template explicitly.
 .env
+.env.*
+!.env.example
 *.log
 logs/
 coverage/
