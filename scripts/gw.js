@@ -71,6 +71,70 @@ const OWNER_COMMANDS = new Set(['migrate']);
 
 const commands = {
   // -------------------------------------------------------------------------
+  /**
+   * Hash a password for SUPERADMIN_PASSWORD_HASH.
+   *
+   * The password is read from stdin, never from argv: an argument would land
+   * in your shell history and in the process list, where any other user on the
+   * box can read it with `ps`.
+   */
+  async 'admin:hash'() {
+    const bcrypt = require('bcryptjs');
+    const rounds = Number(process.env.BCRYPT_ROUNDS || 12);
+
+    const password = await new Promise((resolve, reject) => {
+      let data = '';
+      if (process.stdin.isTTY) {
+        process.stderr.write('Password (will not echo): ');
+        process.stdin.setRawMode(true);
+      }
+      process.stdin.setEncoding('utf8');
+      process.stdin.on('data', (chunk) => {
+        for (const ch of chunk) {
+          if (ch === '\n' || ch === '\r' || ch === '\u0004') {
+            if (process.stdin.isTTY) {
+              process.stdin.setRawMode(false);
+              process.stderr.write('\n');
+            }
+            process.stdin.pause();
+            return resolve(data);
+          }
+          if (ch === '\u0003') {
+            process.stderr.write('\n');
+            return reject(new Error('cancelled'));
+          }
+          data += ch;
+        }
+      });
+      process.stdin.on('end', () => resolve(data));
+      process.stdin.resume();
+    });
+
+    const pw = password.trim();
+    if (pw.length < 16) {
+      console.error(`
+  Refusing: the break-glass password must be at least 16 characters.
+
+  This single credential grants '*' on the gateway — it can change which fields
+  every vendor sees. It is worth a long passphrase.
+`);
+      process.exit(1);
+    }
+
+    const hash = await bcrypt.hash(pw, rounds);
+    console.log(`
+  Add these to /etc/vendor-api-wrapper/env:
+
+    SUPERADMIN_ENABLED=true
+    SUPERADMIN_EMAIL=you@yourcompany.com
+    SUPERADMIN_PASSWORD_HASH=${hash}
+
+  Then turn SUPERADMIN_ENABLED back to false once platform accounts carry the
+  gateway page grant. Every use of this credential is logged at warn level.
+`);
+  },
+
+  // -------------------------------------------------------------------------
   async migrate() {
     requireDb();
     const result = await migrate({
