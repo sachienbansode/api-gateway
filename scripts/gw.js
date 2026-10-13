@@ -111,17 +111,32 @@ const commands = {
     });
 
     const pw = password.trim();
-    if (pw.length < 16) {
-      console.error(`
-  Refusing: the break-glass password must be at least 16 characters.
 
-  This single credential grants '*' on the gateway — it can change which fields
-  every vendor sees. It is worth a long passphrase.
+    // 8 is the floor. Raise it for your deployment with SUPERADMIN_MIN_LENGTH
+    // rather than editing this file.
+    const minLength = Number(process.env.SUPERADMIN_MIN_LENGTH || 8);
+
+    if (pw.length < minLength) {
+      console.error(`
+  Refusing: the break-glass password must be at least ${minLength} characters.
+  You gave ${pw.length}.
 `);
       process.exit(1);
     }
 
     const hash = await bcrypt.hash(pw, rounds);
+
+    if (pw.length < 16) {
+      console.error(`
+  Note: ${pw.length} characters. This credential grants '*' on the gateway — it can
+  change which fields every vendor sees, and it works even when the platform
+  directory is unreachable.
+
+  What keeps it safe is the NSG, not the password: the admin surface is only
+  reachable from the IPs you allow. Keep it that way, and set
+  SUPERADMIN_ENABLED=false once platform accounts carry the page grant.
+`);
+    }
     console.log(`
   Add these to /etc/api-gateway/env:
 
