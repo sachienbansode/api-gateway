@@ -1,6 +1,7 @@
 'use strict';
 
 const { ApiError } = require('../core/errors');
+const { AdminError } = require('../core/adminErrors');
 const errors = require('../core/errors');
 const { releaseOnFailure } = require('./idempotency');
 
@@ -21,7 +22,14 @@ const { releaseOnFailure } = require('./idempotency');
 module.exports = function makeErrorHandler(logger, audit) {
   // eslint-disable-next-line no-unused-vars
   return function errorHandler(err, req, res, next) {
-    const apiErr = err instanceof ApiError ? err : errors.internal(err?.message || 'unknown');
+    // An AdminError is a deliberate, already-safe message for our own staff on
+    // the /admin surface. Without this it would fall through to the generic
+    // 500 below, turning every "your token expired" into "an unexpected error
+    // occurred" — technically safe, practically useless.
+    const apiErr =
+      err instanceof ApiError || err instanceof AdminError
+        ? err
+        : errors.internal(err?.message || 'unknown');
 
     const durationMs = req.startedAt
       ? Math.round(Number(process.hrtime.bigint() - req.startedAt) / 1e6)
@@ -38,7 +46,10 @@ module.exports = function makeErrorHandler(logger, audit) {
         code: apiErr.code,
         // The real cause lives here, in YOUR log, never in the response.
         reason: apiErr.internalReason,
-        stack: apiErr.status >= 500 && !(err instanceof ApiError) ? err?.stack : undefined,
+        stack:
+          apiErr.status >= 500 && !(err instanceof ApiError) && !(err instanceof AdminError)
+            ? err?.stack
+            : undefined,
         durationMs,
       },
       'request failed'

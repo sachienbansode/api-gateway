@@ -1,8 +1,14 @@
 [Unit]
-Description=Vendor API Wrapper Gateway
-Documentation=https://github.com/your-org/api-gateway
+Description=Pravah API Gateway
+Documentation=https://github.com/sachienbansode/api-gateway
 After=network-online.target
 Wants=network-online.target
+
+# If it crash-loops, stop trying and leave it down so the alert is unambiguous.
+# These are [Unit] keys. Placed under [Service] systemd ignores them with
+# "Unknown key name" and the crash-loop guard silently does nothing.
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -22,9 +28,6 @@ Environment=TRUST_PROXY=1
 
 Restart=always
 RestartSec=2
-# If it crash-loops, stop trying and leave it down so the alert is unambiguous.
-StartLimitIntervalSec=60
-StartLimitBurst=5
 
 StandardOutput=journal
 StandardError=journal

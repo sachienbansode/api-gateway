@@ -14,6 +14,7 @@ const makeErrorHandler = require('./middleware/errorHandler');
 const { makeAuthMiddleware } = require('./middleware/auth');
 
 const db = require('./db/pool');
+const adminDb = require('./db/adminPool');
 const { VendorStore } = require('./db/repos/vendors');
 const { AuditWriter } = require('./db/repos/audit');
 
@@ -122,6 +123,17 @@ function createApp({ logger, config } = {}) {
   });
 
   // -------------------------------------------------------------------------
+  // Admin surface. Mounted BEFORE the vendor auth middleware, because an
+  // administrator signs in with a password or a platform token — never with a
+  // vendor API key. The two identities never meet.
+  // -------------------------------------------------------------------------
+  if (String(process.env.ADMIN_UI_ENABLED || 'true').toLowerCase() === 'true') {
+    const { buildAdminRouter } = require('./admin/routes');
+    app.use('/admin', buildAdminRouter(logger));
+    logger.info({ path: '/admin' }, 'admin UI mounted');
+  }
+
+  // -------------------------------------------------------------------------
   // Vendor-facing surface. Auth applies to everything below this line.
   // -------------------------------------------------------------------------
   app.use(makeAuthMiddleware(vendorStore, logger));
@@ -152,6 +164,7 @@ function createApp({ logger, config } = {}) {
   /** Bring up the database-backed pieces. Call before listening. */
   async function start() {
     db.init(logger);
+    adminDb.init(logger);
 
     if (db.isEnabled() && String(process.env.GW_MIGRATE_ON_BOOT || process.env.DB_MIGRATE_ON_BOOT) === 'true') {
       const { migrate } = require('./db/migrate');
@@ -170,6 +183,7 @@ function createApp({ logger, config } = {}) {
     // Flush and persist discovery before the pool closes — it writes through it.
     await observer.stop();
     await audit.stop();
+    await adminDb.close();
     await db.close();
   }
 

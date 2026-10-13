@@ -60,6 +60,22 @@ function pathParams(p) {
   return (p.match(/:[A-Za-z0-9_]+/g) || []).map((s) => s.slice(1));
 }
 
+/**
+ * Is an empty manifest acceptable?
+ *
+ * Normally no. An endpoints.yaml that ends up empty — a bad merge, a truncated
+ * write — would silently take every endpoint offline, and a gateway that
+ * serves nothing while reporting healthy is worse than one that refuses to
+ * start. So emptiness is a hard error by default.
+ *
+ * ALLOW_EMPTY_CONFIG=true opts out, for two legitimate cases: bootstrapping a
+ * new deployment before any endpoint exists, and running with configuration
+ * held somewhere other than these files.
+ */
+function allowEmpty() {
+  return String(process.env.ALLOW_EMPTY_CONFIG || 'false').toLowerCase() === 'true';
+}
+
 function loadUpstreams() {
   const raw = readYaml('upstreams.yaml');
   const src = raw.upstreams || {};
@@ -112,15 +128,26 @@ function loadUpstreams() {
     };
   }
 
-  if (Object.keys(out).length === 0) throw new ConfigError('upstreams.yaml declares no upstreams');
+  if (Object.keys(out).length === 0 && !allowEmpty()) {
+    throw new ConfigError(
+      'upstreams.yaml declares no upstreams. Set ALLOW_EMPTY_CONFIG=true if this ' +
+        'deployment holds its configuration elsewhere.'
+    );
+  }
   return out;
 }
 
 function loadEndpoints(upstreams) {
   const raw = readYaml('endpoints.yaml');
   const list = raw.endpoints || [];
+  if ((!Array.isArray(list) || list.length === 0) && allowEmpty()) {
+    return { endpoints: [], declaredScopes: new Set() };
+  }
   if (!Array.isArray(list) || list.length === 0) {
-    throw new ConfigError('endpoints.yaml declares no endpoints');
+    throw new ConfigError(
+      'endpoints.yaml declares no endpoints. Set ALLOW_EMPTY_CONFIG=true if this ' +
+        'deployment holds its configuration elsewhere.'
+    );
   }
 
   const seenNames = new Set();
@@ -321,8 +348,14 @@ function loadEndpoints(upstreams) {
 function loadVendors(declaredScopes) {
   const raw = readYaml('vendors.yaml');
   const list = raw.vendors || [];
+  if ((!Array.isArray(list) || list.length === 0) && allowEmpty()) {
+    return { vendors: [], byHash: new Map() };
+  }
   if (!Array.isArray(list) || list.length === 0) {
-    throw new ConfigError('vendors.yaml declares no vendors');
+    throw new ConfigError(
+      'vendors.yaml declares no vendors. Set ALLOW_EMPTY_CONFIG=true if vendors ' +
+        'come from the database.'
+    );
   }
 
   const vendors = [];
@@ -405,7 +438,9 @@ function loadVendors(declaredScopes) {
     hashes.forEach((h) => byHash.set(h, vendor));
   }
 
-  if (vendors.length === 0) throw new ConfigError('vendors.yaml: no enabled vendors');
+  if (vendors.length === 0 && !allowEmpty()) {
+    throw new ConfigError('vendors.yaml: no enabled vendors');
+  }
   return { vendors, byHash };
 }
 

@@ -232,8 +232,11 @@ async function trySuperadmin(req, logger) {
 function bearer(req) {
   const h = req.headers.authorization || '';
   if (h.startsWith('Bearer ')) return h.slice(7).trim();
-  const cookieName = process.env.ADMIN_SESSION_COOKIE;
-  if (cookieName && req.cookies && req.cookies[cookieName]) return req.cookies[cookieName];
+  // Same default as src/admin/session.js, which SETS the cookie. These two
+  // defaults disagreeing means a successful sign-in followed by an immediate
+  // bounce back to the login page, with nothing in the logs to say why.
+  const cookieName = process.env.ADMIN_SESSION_COOKIE || 'gw_admin';
+  if (req.cookies && req.cookies[cookieName]) return req.cookies[cookieName];
   return null;
 }
 
@@ -283,7 +286,26 @@ function makeAdminAuth(logger) {
         return next(errors.unauthorized('Invalid or expired token.'));
       }
 
-      if (!adminDb.isEnabled()) {
+      // A break-glass session. Recognised here so it never touches the
+      // platform directory — that account does not exist there, and the whole
+      // point of break-glass is that it works when the directory is down.
+      if (
+        claims.gw_sa === true &&
+        superadminEnabled() &&
+        String(claims.email || '').toLowerCase() ===
+          String(process.env.SUPERADMIN_EMAIL || '').toLowerCase()
+      ) {
+        user = {
+          id: 'superadmin',
+          email: claims.email,
+          role: 'SuperAdmin (.env)',
+          pages: ['*'],
+          canEdit: true,
+          source: 'env',
+        };
+      }
+
+      if (!user && !adminDb.isEnabled()) {
         return next(
           errors.serviceUnavailable(
             'The platform directory is not configured, so grants cannot be checked.'
@@ -293,7 +315,7 @@ function makeAdminAuth(logger) {
 
       const id = claims.id != null ? claims.id : claims.sub;
       try {
-        user = await loadUser(id);
+        if (!user) user = await loadUser(id);
       } catch (err) {
         // Fail CLOSED. An unreachable platform must not mean "let them in" —
         // this is the surface that controls what a vendor can see.
