@@ -129,7 +129,7 @@ function createApp({ logger, config } = {}) {
   // -------------------------------------------------------------------------
   if (String(process.env.ADMIN_UI_ENABLED || 'true').toLowerCase() === 'true') {
     const { buildAdminRouter } = require('./admin/routes');
-    app.use('/admin', buildAdminRouter(logger));
+    app.use('/admin', buildAdminRouter(logger, { config: cfg, client, audit, vendorStore }));
     logger.info({ path: '/admin' }, 'admin UI mounted');
   }
 

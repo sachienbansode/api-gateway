@@ -7,7 +7,12 @@ const adminDb = require('../db/adminPool');
 const session = require('./session');
 const attempts = require('./loginAttempts');
 const loginPage = require('./loginPage');
+const pages = require('./pages');
 const { makeAdminAuth } = require('../middleware/adminAuth');
+const db = require('../db/pool');
+const vendorRepo = require('../db/repos/vendors');
+const auditRepo = require('../db/repos/audit');
+const quotaRepo = require('../db/repos/quota');
 
 /**
  * The admin surface: a login page, a session, and a landing page behind it.
@@ -81,7 +86,7 @@ function superadminConfigured() {
   );
 }
 
-function buildAdminRouter(logger) {
+function buildAdminRouter(logger, deps = {}) {
   const router = express.Router();
 
   router.use(session.cookieParser);
@@ -221,8 +226,217 @@ function buildAdminRouter(logger) {
     });
   });
 
-  router.get('/', (req, res) => {
-    res.type('html').send(dashboard(req.admin, title));
+  // -------------------------------------------------------------------------
+  // Screens
+  //
+  // `deps` carries the live objects the app already built — the parsed config,
+  // the upstream client, the audit writer, the vendor store. Reading them here
+  // means the console shows what the PROCESS is actually serving, not what the
+  // files on disk say. Those differ whenever someone edited YAML without
+  // deploying, which is exactly when you want to know.
+  // -------------------------------------------------------------------------
+  const cfg = () => deps.config || { endpoints: [], upstreams: {}, unreachable: [] };
+
+  async function liveHealth() {
+    const out = {
+      upstreams: deps.client ? deps.client.health() : {},
+      database: await db.health(),
+      audit: deps.audit ? deps.audit.stats() : {},
+      vendorStore: deps.vendorStore ? deps.vendorStore.snapshot() : {},
+    };
+    return out;
+  }
+
+  const flashOf = (req) => {
+    if (req.query.ok) return { kind: 'ok', text: String(req.query.ok).slice(0, 300) };
+    if (req.query.err) return { kind: 'err', text: String(req.query.err).slice(0, 300) };
+    return null;
+  };
+
+  /** Everything below needs the database; say so plainly rather than crashing. */
+  function requireDb(res) {
+    if (db.isEnabled()) return true;
+    res
+      .status(503)
+      .type('html')
+      .send(
+        pages.overview({
+          admin: { email: '', role: '', canEdit: false },
+          flash: { kind: 'err', text: 'No database configured — vendor management is unavailable.' },
+          cfg: cfg(),
+          vendors: [],
+          health: {},
+          usage: [],
+        })
+      );
+    return false;
+  }
+
+  router.get('/', async (req, res, next) => {
+    try {
+      const since = new Date(Date.now() - 30 * 864e5);
+      const [vendors, health, usage] = await Promise.all([
+        db.isEnabled() ? vendorRepo.listVendorsWithKeys() : [],
+        liveHealth(),
+        db.isEnabled() ? auditRepo.usageSummary({ since }) : [],
+      ]);
+      res.type('html').send(
+        pages.overview({ admin: req.admin, flash: flashOf(req), cfg: cfg(), vendors, health, usage })
+      );
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.get('/vendors', async (req, res, next) => {
+    try {
+      const vendors = db.isEnabled() ? await vendorRepo.listVendorsWithKeys() : [];
+      const scopes = new Set();
+      for (const e of cfg().endpoints) for (const s of e.scopes || []) scopes.add(s);
+      res.type('html').send(
+        pages.vendorsPage({ admin: req.admin, flash: flashOf(req), vendors, cfg: cfg(), scopes })
+      );
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.post('/vendors', async (req, res, next) => {
+    if (!requireDb(res)) return;
+    try {
+      const id = String(req.body.id || '').trim().toLowerCase();
+      if (!/^[a-z0-9][a-z0-9_-]*$/.test(id)) {
+        return res.redirect(303, '/admin/vendors?err=' + encodeURIComponent('Invalid vendor id.'));
+      }
+      let scopes = req.body.scopes || [];
+      if (!Array.isArray(scopes)) scopes = [scopes];
+
+      await vendorRepo.upsertVendor({
+        id,
+        name: String(req.body.name || '').trim() || id,
+        scopes: scopes.map(String),
+        rateMax: req.body.rateMax ? Number(req.body.rateMax) : undefined,
+        rateWindowMs: req.body.rateMax ? 60000 : undefined,
+        monthlyQuota: req.body.monthlyQuota ? Number(req.body.monthlyQuota) : null,
+      });
+      logger?.warn({ admin: req.admin.email, vendor: id, scopes }, 'admin saved vendor');
+      await deps.vendorStore?.refresh?.().catch(() => {});
+      res.redirect(303, '/admin/vendors?ok=' + encodeURIComponent(`Vendor "${id}" saved.`));
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.get('/vendors/:id', async (req, res, next) => {
+    if (!requireDb(res)) return;
+    try {
+      const keys = await vendorRepo.listKeys(req.params.id);
+      res.type('html').send(
+        pages.vendorKeysPage({
+          admin: req.admin,
+          flash: flashOf(req),
+          vendorId: req.params.id,
+          keys,
+          issuedKey: null,
+        })
+      );
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.post('/vendors/:id/toggle', async (req, res, next) => {
+    if (!requireDb(res)) return;
+    try {
+      const list = await vendorRepo.listVendorsWithKeys();
+      const v = list.find((x) => x.id === req.params.id);
+      if (!v) return res.redirect(303, '/admin/vendors?err=' + encodeURIComponent('No such vendor.'));
+      await vendorRepo.setEnabled(req.params.id, !v.enabled);
+      logger?.warn(
+        { admin: req.admin.email, vendor: req.params.id, enabled: !v.enabled },
+        'admin toggled vendor'
+      );
+      await deps.vendorStore?.refresh?.().catch(() => {});
+      res.redirect(
+        303,
+        '/admin/vendors?ok=' +
+          encodeURIComponent(`Vendor "${req.params.id}" ${v.enabled ? 'disabled' : 'enabled'}.`)
+      );
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.post('/vendors/:id/keys', async (req, res, next) => {
+    if (!requireDb(res)) return;
+    try {
+      const out = await vendorRepo.issueKey({
+        vendorId: req.params.id,
+        label: String(req.body.label || '').trim() || null,
+      });
+      logger?.warn({ admin: req.admin.email, vendor: req.params.id }, 'admin issued an API key');
+      await deps.vendorStore?.refresh?.().catch(() => {});
+      const keys = await vendorRepo.listKeys(req.params.id);
+      // The plaintext key is rendered once, here, and never stored or logged.
+      res.type('html').send(
+        pages.vendorKeysPage({
+          admin: req.admin,
+          flash: null,
+          vendorId: req.params.id,
+          keys,
+          issuedKey: out.key || out,
+        })
+      );
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.post('/vendors/:id/keys/revoke', async (req, res, next) => {
+    if (!requireDb(res)) return;
+    try {
+      await vendorRepo.revokeKey({ vendorId: req.params.id, keyHash: String(req.body.keyHash) });
+      logger?.warn({ admin: req.admin.email, vendor: req.params.id }, 'admin revoked an API key');
+      await deps.vendorStore?.refresh?.().catch(() => {});
+      res.redirect(
+        303,
+        `/admin/vendors/${encodeURIComponent(req.params.id)}?ok=` +
+          encodeURIComponent('Key revoked. Takes up to 30s to apply.')
+      );
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.get('/endpoints', (req, res) => {
+    res.type('html').send(pages.endpointsPage({ admin: req.admin, flash: flashOf(req), cfg: cfg() }));
+  });
+
+  router.get('/activity', async (req, res, next) => {
+    try {
+      const days = Math.min(90, Math.max(1, Number(req.query.days) || 30));
+      const since = new Date(Date.now() - days * 864e5);
+      const [usage, recent, quota] = await Promise.all([
+        db.isEnabled() ? auditRepo.usageSummary({ since }) : [],
+        db.isEnabled() ? auditRepo.recentForVendor(null, 50).catch(() => []) : [],
+        db.isEnabled() ? quotaRepo.allUsage().catch(() => []) : [],
+      ]);
+      res.type('html').send(
+        pages.activityPage({ admin: req.admin, flash: flashOf(req), usage, recent, quota, days })
+      );
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.get('/health', async (req, res, next) => {
+    try {
+      res.type('html').send(
+        pages.healthPage({ admin: req.admin, flash: flashOf(req), health: await liveHealth(), cfg: cfg() })
+      );
+    } catch (err) {
+      next(err);
+    }
   });
 
   router.get('/me', (req, res) => {
@@ -235,67 +449,6 @@ function buildAdminRouter(logger) {
   });
 
   return router;
-}
-
-/** Minimal landing page. The management screens come next. */
-function dashboard(admin, title) {
-  const e = loginPage.esc;
-  return `<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="robots" content="noindex, nofollow">
-<title>${e(title)}</title>
-<style>
-  :root { --bg:#f4f5f7; --card:#fff; --fg:#1a1d23; --muted:#6b7280; --line:#d9dce1; --accent:#1f3864; }
-  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
-    --bg:#15171c; --card:#1d2026; --fg:#e8eaed; --muted:#9aa0a6; --line:#343842; --accent:#5b8def; } }
-  *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--fg);
-    font:15px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif}
-  header{display:flex;align-items:center;justify-content:space-between;gap:16px;
-    padding:14px 20px;background:var(--card);border-bottom:1px solid var(--line);flex-wrap:wrap}
-  h1{margin:0;font-size:16px}
-  .who{color:var(--muted);font-size:13px}
-  button{font:inherit;font-size:13px;padding:7px 12px;border:1px solid var(--line);
-    border-radius:6px;background:transparent;color:var(--fg);cursor:pointer}
-  main{max-width:720px;margin:0 auto;padding:24px 16px}
-  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:20px;margin-bottom:16px}
-  h2{margin:0 0 8px;font-size:15px}
-  p{margin:0 0 10px;color:var(--muted);font-size:14px}
-  code{background:var(--bg);padding:1px 5px;border-radius:4px;font-size:13px}
-  .ro{display:inline-block;margin-left:8px;padding:2px 8px;border-radius:999px;
-    background:var(--bg);border:1px solid var(--line);font-size:11px;color:var(--muted)}
-</style></head>
-<body>
-<header>
-  <h1>${e(title)}</h1>
-  <div>
-    <span class="who">${e(admin.email)} · ${e(admin.role || 'unknown role')}${
-      admin.canEdit ? '' : '<span class="ro">read only</span>'
-    }</span>
-    <form method="post" action="/admin/logout" style="display:inline;margin-left:10px">
-      <button type="submit">Sign out</button>
-    </form>
-  </div>
-</header>
-<main>
-  <div class="card">
-    <h2>Signed in</h2>
-    <p>Identity: <strong>${e(admin.source === 'env' ? 'break-glass superadmin' : 'platform account')}</strong>.
-       Role and permissions are read live from the platform on every request, so a change there
-       takes effect within seconds.</p>
-    ${
-      admin.source === 'env'
-        ? '<p>⚠ This is the break-glass credential. Set <code>SUPERADMIN_ENABLED=false</code> once platform accounts carry the gateway page grant.</p>'
-        : ''
-    }
-  </div>
-  <div class="card">
-    <h2>Next</h2>
-    <p>Upstream and endpoint management screens are not built yet. Until they are,
-       configuration lives in <code>config/</code> and is applied with <code>deploy.sh</code>.</p>
-  </div>
-</main>
-</body></html>`;
 }
 
 module.exports = { buildAdminRouter };
