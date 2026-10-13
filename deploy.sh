@@ -152,15 +152,19 @@ fi
 bold "Restart"
 trap - ERR    # past this point we handle failure ourselves, with logs
 
-systemctl daemon-reload
-systemctl restart "$SVC"
-systemctl is-enabled --quiet "$SVC" || systemctl enable --quiet "$SVC"
-ok "$SVC restarted"
+command -v pm2 >/dev/null || die "pm2 is not installed:  sudo npm install -g pm2"
+
+# startOrRestart handles both the first deploy and every one after it, and
+# re-reads ecosystem.config.js each time so an env-file change is picked up
+# without deleting the process.
+pm2 startOrRestart "$APP_DIR/ecosystem.config.js" --update-env
+pm2 save --force >/dev/null 2>&1 || true
+ok "$SVC restarted under pm2"
 
 # ---------------------------------------------------------------------------
 # 5. Prove it actually came up
 #
-# "systemctl restart returned 0" only means systemd forked it. A gateway that
+# "pm2 start" returning 0 only means the process was forked. A gateway that
 # boots and then dies on an unresolved upstream credential looks identical
 # until you ask it.
 # ---------------------------------------------------------------------------
