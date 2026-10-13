@@ -1,7 +1,7 @@
 'use strict';
 
 const { Pool } = require('pg');
-const fs = require('fs');
+const pgConfig = require('./pgConfig');
 
 /**
  * Second connection: the PLATFORM meta database (users, roles).
@@ -17,19 +17,18 @@ const fs = require('fs');
  * an UPDATE or INSERT, and the credential you configure should not have the
  * privilege to either.
  *
- * Env, following the platform's own convention:
- *   ADMIN_DATABASE_URL     postgres URL WITHOUT the password
- *   ADMIN_PG_PASSWORD      applied after the URL is parsed, and overrides any
- *                          password embedded in it. Keeping the secret in its
- *                          own variable means a logged or pasted URL is not a
- *                          credential leak.
- *   ADMIN_PG_SSL           'true' (default) or 'false'
- *   ADMIN_PG_POOL_MAX      default 5 — admin traffic is console users, not
+ * Env block prefix: AUTH_ (see .env.example)
+ *
+ *   AUTH_DATABASE_URL      postgres URL WITHOUT the password
+ *   AUTH_PG_PASSWORD       applied after the URL is parsed, and overrides any
+ *                          password embedded in it
+ *   AUTH_PG_SSL            'true' (default) or 'false'
+ *   AUTH_PG_POOL_MAX       default 5 — admin traffic is console users, not
  *                          vendor traffic, and the 15s permission cache means
  *                          even a busy console is a trickle of queries
  *   ADMIN_SCHEMA           default 'admin-staging-api'
  *
- * Absent ADMIN_DATABASE_URL, `isEnabled()` is false and the gateway runs with
+ * Absent AUTH_DATABASE_URL, `isEnabled()` is false and the gateway runs with
  * the .env superadmin alone. That is the documented degraded mode, not a
  * failure — see ADMIN_AUTH.md.
  */
@@ -46,77 +45,41 @@ const q = (s) => '"' + String(s).replace(/"/g, '""') + '"';
 /** Schema-qualified, correctly quoted table reference. */
 const T = (name) => q(SCHEMA) + '.' + q(name);
 
-function buildSsl(logger) {
-  if (String(process.env.ADMIN_PG_SSL || 'true').toLowerCase() === 'false') {
-    logger?.warn('platform database TLS is DISABLED — local development only');
-    return false;
-  }
-
-  const caPath = process.env.ADMIN_PG_CA_CERT_PATH;
-  if (caPath) {
-    if (!fs.existsSync(caPath)) {
-      throw new Error(`ADMIN_PG_CA_CERT_PATH points at a file that does not exist: ${caPath}`);
-    }
-    return { ca: fs.readFileSync(caPath, 'utf8'), rejectUnauthorized: true };
-  }
-
-  if (String(process.env.ADMIN_PG_SSL_INSECURE).toLowerCase() === 'true') {
-    logger?.warn(
-      'platform database TLS certificate verification is OFF ' +
-        '(ADMIN_PG_SSL_INSECURE=true). The connection is encrypted but not ' +
-        'authenticated. This link carries who may administer the gateway, so ' +
-        'an active attacker on the path could answer for the platform.'
-    );
-    return { rejectUnauthorized: false };
-  }
-
-  return { rejectUnauthorized: true };
-}
-
 function init(logger) {
-  const url = process.env.ADMIN_DATABASE_URL;
-  if (!url) {
+  const built = pgConfig.build('AUTH', {
+    fallbackUrlVars: ['ADMIN_DATABASE_URL'],
+    poolMax: 5,
+    applicationName: 'api-gateway-auth',
+    logger,
+  });
+
+  if (!built) {
     enabled = false;
     logger?.warn(
-      'ADMIN_DATABASE_URL is not set — platform users and roles are unavailable. ' +
+      'AUTH_DATABASE_URL is not set — platform users and roles are unavailable. ' +
         'Admin access falls back to the .env superadmin only.'
     );
     return;
   }
 
-  const cfg = {
-    connectionString: url,
-    ssl: buildSsl(logger),
-    max: Number(process.env.ADMIN_PG_POOL_MAX || 5),
-    min: 0,
-    connectionTimeoutMillis: Number(process.env.ADMIN_PG_CONNECT_TIMEOUT_MS || 8000),
-    idleTimeoutMillis: 30000,
-    // An admin lookup must never hold a connection open against a sick
-    // platform database. It fails, the request gets a 503, the gateway's
-    // vendor traffic is untouched.
-    statement_timeout: Number(process.env.ADMIN_PG_STATEMENT_TIMEOUT_MS || 5000),
-    application_name: 'api-gateway-admin',
-  };
-
-  // The platform convention: the password lives in its own variable and wins
-  // over anything in the URL.
-  if (process.env.ADMIN_PG_PASSWORD) cfg.password = process.env.ADMIN_PG_PASSWORD;
+  const cfg = built.config;
+  cfg.connectionTimeoutMillis = Number(process.env.AUTH_PG_CONNECT_TIMEOUT_MS) || 8000;
 
   pool = new Pool(cfg);
 
   // A pool-level error is an idle client dropped by the server. Without a
   // handler, pg raises it on the process and takes the gateway down with it —
-  // which would mean the PLATFORM database killing a connection stops VENDOR
+  // which would mean the AUTH database killing a connection stops VENDOR
   // traffic. Log it and let the pool reconnect.
   pool.on('error', (err) => {
     lastError = err.message;
-    logger?.warn({ err: err.message }, 'platform database pool error (idle client)');
+    logger?.warn({ err: err.message }, 'auth database pool error (idle client)');
   });
 
   enabled = true;
   logger?.info(
-    { schema: SCHEMA, poolMax: cfg.max },
-    'platform database configured for admin identity'
+    { database: pgConfig.describe(built.url), from: built.source, schema: SCHEMA, poolMax: cfg.max },
+    'auth database configured for admin identity'
   );
 }
 
@@ -125,7 +88,7 @@ function isEnabled() {
 }
 
 async function query(text, params) {
-  if (!isEnabled()) throw new Error('platform database is not configured');
+  if (!isEnabled()) throw new Error('auth database is not configured');
   return pool.query(text, params);
 }
 

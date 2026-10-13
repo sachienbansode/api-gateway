@@ -153,7 +153,7 @@ function createApp({ logger, config } = {}) {
   async function start() {
     db.init(logger);
 
-    if (db.isEnabled() && String(process.env.DB_MIGRATE_ON_BOOT) === 'true') {
+    if (db.isEnabled() && String(process.env.GW_MIGRATE_ON_BOOT || process.env.DB_MIGRATE_ON_BOOT) === 'true') {
       const { migrate } = require('./db/migrate');
       const result = await migrate(logger);
       if (result.applied.length) {

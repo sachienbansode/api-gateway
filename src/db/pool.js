@@ -2,6 +2,7 @@
 
 const { Pool } = require('pg');
 const fs = require('fs');
+const pgConfig = require('./pgConfig');
 
 /**
  * Postgres connection pool, configured for Azure Database for PostgreSQL
@@ -69,18 +70,27 @@ function buildSslConfig(logger) {
  *        compromised gateway cannot DROP the audit log it was caught in.
  */
 function init(logger, { forMigration = false } = {}) {
-  const url = forMigration
-    ? process.env.MIGRATION_DATABASE_URL || process.env.DATABASE_URL
-    : process.env.DATABASE_URL;
+  // The gateway's OWN database. Env block prefix: GW_
+  const built = pgConfig.build('GW', {
+    url: forMigration
+      ? process.env.GW_MIGRATION_DATABASE_URL || process.env.MIGRATION_DATABASE_URL
+      : undefined,
+    fallbackUrlVars: ['DATABASE_URL'],
+    poolMax: 10,
+    applicationName: 'api-gateway',
+    logger,
+  });
 
-  if (forMigration && process.env.MIGRATION_DATABASE_URL) {
-    logger?.info('using MIGRATION_DATABASE_URL (owner role) for schema changes');
+  const url = built && built.url;
+
+  if (forMigration && (process.env.GW_MIGRATION_DATABASE_URL || process.env.MIGRATION_DATABASE_URL)) {
+    logger?.info('using the migration (owner) credential for schema changes');
   }
 
   if (!url) {
     enabled = false;
     logger?.warn(
-      'DATABASE_URL is not set — running without a database. Audit rows, durable ' +
+      'GW_DATABASE_URL is not set — running without a database. Audit rows, durable ' +
         'quotas and idempotency are disabled; vendor keys come from config/env. ' +
         'Fine for local development, not for production.'
     );
@@ -92,25 +102,30 @@ function init(logger, { forMigration = false } = {}) {
   // silently throws away the least-privilege separation.
   if (!forMigration && /:\/\/(gw_owner|postgres|pgadmin|azureuser)[:@]/i.test(url)) {
     logger?.warn(
-      'DATABASE_URL appears to use an owner or admin role. The running gateway ' +
+      'GW_DATABASE_URL appears to use an owner or admin role. The running gateway ' +
         'should connect as the restricted app role (gw_app) and only migrations ' +
         'should use the owner. See db/setup/ for the setup scripts.'
     );
   }
 
-  pool = new Pool({
-    connectionString: url,
-    ssl: buildSslConfig(logger),
-    max: Number(process.env.DB_POOL_MAX) || 10,
-    min: Number(process.env.DB_POOL_MIN) || 0,
-    idleTimeoutMillis: Number(process.env.DB_IDLE_TIMEOUT_MS) || 30000,
-    connectionTimeoutMillis: Number(process.env.DB_CONNECT_TIMEOUT_MS) || 5000,
-    // Cap how long one query can hold a connection. Without this a single slow
-    // query can starve the pool and take the gateway down with it.
-    statement_timeout: Number(process.env.DB_STATEMENT_TIMEOUT_MS) || 5000,
-    query_timeout: Number(process.env.DB_QUERY_TIMEOUT_MS) || 5000,
-    application_name: 'api-gateway',
-  });
+  // Legacy DB_* names still win if someone has them set, so an existing
+  // deployment is not silently re-tuned by this change.
+  const cfg = built.config;
+  if (process.env.DB_POOL_MAX) cfg.max = Number(process.env.DB_POOL_MAX);
+  if (process.env.DB_POOL_MIN) cfg.min = Number(process.env.DB_POOL_MIN);
+  if (process.env.DB_CONNECT_TIMEOUT_MS) cfg.connectionTimeoutMillis = Number(process.env.DB_CONNECT_TIMEOUT_MS);
+  if (process.env.DB_STATEMENT_TIMEOUT_MS) cfg.statement_timeout = Number(process.env.DB_STATEMENT_TIMEOUT_MS);
+  if (process.env.DB_SSL || process.env.DB_CA_CERT_PATH || process.env.DB_SSL_INSECURE) {
+    cfg.ssl = buildSslConfig(logger);
+  }
+  cfg.query_timeout = Number(process.env.GW_PG_QUERY_TIMEOUT_MS || process.env.DB_QUERY_TIMEOUT_MS) || 5000;
+
+  logger?.info(
+    { database: pgConfig.describe(url), from: built.source, poolMax: cfg.max },
+    'gateway database configured'
+  );
+
+  pool = new Pool(cfg);
 
   // An idle client erroring (network blip, Azure maintenance failover) must not
   // become an uncaught exception that kills the process.

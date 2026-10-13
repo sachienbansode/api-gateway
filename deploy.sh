@@ -105,10 +105,10 @@ ok "manifests parse and every credential resolves"
 # 3. Schema
 # ---------------------------------------------------------------------------
 bold "Database"
-if [[ -z "${DATABASE_URL:-}" ]]; then
+if [[ -z "${GW_DATABASE_URL:-}" ]]; then
   warn "DATABASE_URL is not set — audit, durable quota and idempotency are DISABLED"
 elif [[ "$MIGRATE" == "true" ]]; then
-  [[ -n "${MIGRATION_DATABASE_URL:-}" ]] || die "MIGRATE=true needs MIGRATION_DATABASE_URL (the owner credential)"
+  [[ -n "${GW_MIGRATION_DATABASE_URL:-}" ]] || die "MIGRATE=true needs GW_MIGRATION_DATABASE_URL (the owner credential)"
   node scripts/gw.js migrate
   ok "migrations applied"
 else

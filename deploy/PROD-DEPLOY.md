@@ -162,40 +162,51 @@ sudoedit /etc/api-gateway/env
 ```
 
 ```bash
-# ---- Gateway's own database (AWS, database `gateway`) ----
-DATABASE_URL=postgresql://gw_app:PASSWORD@13.234.135.5:5432/gateway?sslmode=require
-DB_SSL=require
-DB_SSL_INSECURE=true          # until you install the server's real CA
-DB_MIGRATE_ON_BOOT=false      # schema is already in place and recorded
+# ---------------------------------------------------------------------------
+# DB 1: Gateway — the app's own database (read/write)
+# ---------------------------------------------------------------------------
+GW_DATABASE_URL=postgresql://gw_app@13.234.135.5:5432/gateway
+GW_PG_PASSWORD=
+GW_PG_SSL=true
+GW_PG_POOL_MAX=10
+GW_PG_SSL_INSECURE=true        # until the server's CA is on the box
+GW_MIGRATE_ON_BOOT=false       # schema is already in place and recorded
 
-# ---- Platform directory, READ ONLY (same server, database uat_ananta_staging) ----
-# The password lives in its own variable and overrides anything in the URL,
-# matching the platform's own convention. Keep it out of the URL.
-ADMIN_DATABASE_URL=postgresql://gw_admin_ro@13.234.135.5:5432/uat_ananta_staging
-ADMIN_PG_PASSWORD=
-ADMIN_PG_SSL=true
-ADMIN_PG_SSL_INSECURE=true    # same caveat as above
-ADMIN_PG_POOL_MAX=5
+# ---------------------------------------------------------------------------
+# DB 2: Auth — the platform's user and role directory (READ ONLY)
+# ---------------------------------------------------------------------------
+AUTH_DATABASE_URL=postgresql://gw_auth_ro@13.234.135.5:5432/uat_ananta_staging
+AUTH_PG_PASSWORD=
+AUTH_PG_SSL=true
+AUTH_PG_POOL_MAX=5
+AUTH_PG_SSL_INSECURE=true
 ADMIN_SCHEMA=admin-staging-api
 
-# ---- Admin identity (same JWT issuer as the platform) ----
-JWT_SECRET=                   # MUST match the platform's, or no token verifies
+# ---------------------------------------------------------------------------
+# Admin identity — same JWT issuer as the platform
+# ---------------------------------------------------------------------------
+JWT_SECRET=                    # MUST match the platform's, or no token verifies
 JWT_ISSUER=omnenest-staging-api
 GATEWAY_PAGE_KEY=api-gateway
 ADMIN_PERM_CACHE_MS=15000
 
-# ---- Break-glass superadmin ----
-# Generate the hash with: node scripts/gw.js admin:hash
+# Break-glass. Generate with: node scripts/gw.js admin:hash
 SUPERADMIN_ENABLED=true
 SUPERADMIN_EMAIL=you@yourcompany.com
 SUPERADMIN_PASSWORD_HASH=
 
-# ---- Upstreams ----
-# Every ${VAR} referenced from config/upstreams.yaml must be here.
+# ---------------------------------------------------------------------------
+# Upstreams — every ${VAR} named in config/upstreams.yaml must be here.
 # An unresolved one is a hard boot failure, by design.
+# ---------------------------------------------------------------------------
 INTERNAL_NODE_API_TOKEN=
 INTERNAL_PY_API_KEY=
 ```
+
+In both blocks the password lives in its own variable and **overrides any
+password in the URL**. That is deliberate: a connection URL gets logged, pasted
+into tickets and shown in `ps`, and the secret should not travel with it. If you
+put one in the URL anyway, the app warns and uses the separate variable.
 
 ⚠ **`gw_admin_ro` must be read-only on the platform database.** The gateway
 reads identity; it never writes a user, a role or a grant. Give it `CONNECT`,
@@ -230,7 +241,7 @@ broken. See the open decision in the go-live workbook.
 Measure the cross-cloud latency now, while you can still act on it:
 
 ```bash
-psql "$DATABASE_URL" -c '\timing' -c 'SELECT 1' -c 'SELECT 1' -c 'SELECT 1'
+psql "$GW_DATABASE_URL" -c '\timing' -c 'SELECT 1' -c 'SELECT 1' -c 'SELECT 1'
 ```
 
 Under ~15 ms is fine. Consistently above ~40 ms and you should move quota off
