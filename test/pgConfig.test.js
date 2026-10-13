@@ -41,6 +41,7 @@ test('the two blocks are independent', () => {
 test('SSL on by default, off only when asked', () => {
   clean();
   process.env.GW_DATABASE_URL='postgresql://u@h:5432/d';
+  process.env.GW_PG_PASSWORD='pw';
   assert.deepStrictEqual(pgConfig.build('GW',{logger:silent}).config.ssl,{rejectUnauthorized:true});
   process.env.GW_PG_SSL='false';
   assert.strictEqual(pgConfig.build('GW',{logger:silent}).config.ssl,false);
@@ -54,6 +55,7 @@ test('no URL configured returns null rather than a broken config', () => {
 test('legacy DATABASE_URL still works as a fallback', () => {
   clean();
   process.env.DATABASE_URL='postgresql://u@h:5432/legacy';
+  process.env.GW_PG_PASSWORD='pw';
   const b = pgConfig.build('GW',{fallbackUrlVars:['DATABASE_URL'],logger:silent});
   assert.strictEqual(b.source,'DATABASE_URL');
   delete process.env.DATABASE_URL;
@@ -61,4 +63,16 @@ test('legacy DATABASE_URL still works as a fallback', () => {
 
 test('describe() never leaks the password', () => {
   assert.strictEqual(pgConfig.describe('postgresql://u:TOPSECRET@13.234.135.5:5432/gateway'),'13.234.135.5:5432/gateway');
+});
+
+test('a blank password is refused with a message naming the variable', () => {
+  clean();
+  process.env.GW_DATABASE_URL = 'postgresql://root_admin@13.234.135.5:5432/gateway';
+  assert.throws(() => pgConfig.build('GW', { logger: silent }), /GW_PG_PASSWORD is empty/);
+});
+
+test('a password inside the URL is still accepted on its own', () => {
+  clean();
+  process.env.GW_DATABASE_URL = 'postgresql://root_admin:inurl@13.234.135.5:5432/gateway';
+  assert.ok(pgConfig.build('GW', { logger: silent }));
 });

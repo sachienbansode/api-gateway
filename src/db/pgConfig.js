@@ -91,8 +91,56 @@ function build(prefix, opts = {}) {
 
   if (!url) return null;
 
+  // ⚠ Do NOT pass `connectionString` together with a separate `password`.
+  //
+  // node-postgres parses the connection string AFTER merging your options, and
+  // a URL with no password in it parses to `password: null`. That null then
+  // overwrites the password you set, and the driver fails at the handshake
+  // with "SASL: SCRAM-SERVER-FIRST-MESSAGE: client password must be a string"
+  // — while `config.password` still reads as a string right up to the moment
+  // the Pool is constructed. Verified against a real PostgreSQL 16 with
+  // scram-sha-256: connectionString+password FAILS, discrete fields WORK.
+  //
+  // So when the password lives in its own variable — which is the whole point
+  // of the <PREFIX>_PG_PASSWORD convention — decompose the URL into discrete
+  // fields and do not hand the driver a connection string at all.
+  const password = env(prefix, 'PG_PASSWORD');
+  const urlHasPassword = /:\/\/[^/@]*:[^@]+@/.test(url);
+
+  if (!password && !urlHasPassword) {
+    throw new Error(
+      `${prefix}_PG_PASSWORD is empty and ${prefix}_DATABASE_URL carries no password. ` +
+        `Set ${prefix}_PG_PASSWORD in the env file.`
+    );
+  }
+
+  let target;
+  if (password) {
+    let u;
+    try {
+      u = new URL(url);
+    } catch {
+      throw new Error(`${prefix}_DATABASE_URL is not a valid postgres URL: ${url}`);
+    }
+    target = {
+      host: u.hostname,
+      port: Number(u.port) || 5432,
+      database: decodeURIComponent(u.pathname.replace(/^\//, '')) || undefined,
+      user: decodeURIComponent(u.username) || undefined,
+      password,
+    };
+    if (urlHasPassword) {
+      logger?.warn(
+        `${prefix}_DATABASE_URL contains a password AND ${prefix}_PG_PASSWORD is set. ` +
+          `${prefix}_PG_PASSWORD is being used. Remove the one in the URL.`
+      );
+    }
+  } else {
+    target = { connectionString: url };
+  }
+
   const config = {
-    connectionString: url,
+    ...target,
     ssl: buildSsl(prefix, logger),
     max: Number(env(prefix, 'PG_POOL_MAX')) || opts.poolMax || 10,
     min: 0,
@@ -103,18 +151,6 @@ function build(prefix, opts = {}) {
     statement_timeout: Number(env(prefix, 'PG_STATEMENT_TIMEOUT_MS')) || 5000,
     application_name: opts.applicationName || 'api-gateway',
   };
-
-  // The password wins over anything in the URL. Applied last, deliberately.
-  const password = env(prefix, 'PG_PASSWORD');
-  if (password) {
-    config.password = password;
-    if (/:\/\/[^/@]*:[^@]+@/.test(url)) {
-      logger?.warn(
-        `${prefix}_DATABASE_URL contains a password AND ${prefix}_PG_PASSWORD is set. ` +
-          `${prefix}_PG_PASSWORD is being used. Remove the one in the URL.`
-      );
-    }
-  }
 
   return { config, url, source };
 }
