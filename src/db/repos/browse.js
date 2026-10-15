@@ -178,4 +178,32 @@ async function facets(application = null) {
   };
 }
 
-module.exports = { endpoints, upstreams, upstream, facets };
+/**
+ * Full endpoint rows for document generation — parameters and fields included.
+ *
+ * Separate from endpoints() because a list page must not drag 938 field rows
+ * across the wire to render 10 names, and a Postman collection is useless
+ * without them. Aggregated in SQL so one query serves a whole collection
+ * rather than N+1 of them.
+ */
+async function forExport({ application = null, upstream = null, name = null, status = null } = {}) {
+  const res = await db.query(
+    `SELECT e.*, c.label AS category_label,
+            COALESCE((SELECT jsonb_agg(to_jsonb(p) ORDER BY p.sort_order, p.name)
+                        FROM gateway.endpoint_params p WHERE p.endpoint = e.name), '[]') AS params,
+            COALESCE((SELECT jsonb_agg(to_jsonb(f) ORDER BY f.sort_order, f.path)
+                        FROM gateway.endpoint_fields f WHERE f.endpoint = e.name), '[]') AS fields
+       FROM gateway.endpoints e
+       LEFT JOIN gateway.api_categories c
+              ON c.application = e.application AND c.code = e.category
+      WHERE ($1::text IS NULL OR e.application = $1)
+        AND ($2::text IS NULL OR e.upstream    = $2)
+        AND ($3::text IS NULL OR e.name        = $3)
+        AND ($4::text IS NULL OR e.status      = $4)
+      ORDER BY c.sort_order NULLS LAST, e.display_name NULLS LAST, e.name`,
+    [application, upstream, name, status]
+  );
+  return res?.rows || [];
+}
+
+module.exports = { endpoints, upstreams, upstream, facets, forExport };

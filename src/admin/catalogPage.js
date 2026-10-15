@@ -40,6 +40,11 @@ tr.row{cursor:pointer}
   margin-bottom:-1px;text-decoration:none}
 .tabs a:hover{color:var(--ink);text-decoration:none}
 .tabs a[aria-current]{color:var(--ink);font-weight:600;border-bottom-color:var(--gold)}
+.fullurl{display:flex;align-items:center;gap:10px;background:var(--surface2);
+  border:1px solid var(--border);border-radius:var(--r);padding:11px 13px;flex-wrap:wrap}
+.fullurl .m{font-size:10px;font-weight:700;letter-spacing:.6px;color:#fff;background:var(--ink);
+  border-radius:3px;padding:3px 7px}
+.fullurl code{font-family:var(--mono);font-size:12.5px;color:var(--ink);word-break:break-all}
 .sum{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-bottom:16px}
 `;
 
@@ -97,27 +102,34 @@ function select(name, label, options, value, allLabel) {
 // ---------------------------------------------------------------------------
 // List: endpoints
 // ---------------------------------------------------------------------------
-function endpointList({ admin, flash, page: p, facets, query }) {
+function endpointList({ admin, flash, page: p, facets, query, baseUrl }) {
   const rows = p.rows.map((e) => `
-    <tr class="row" onclick="location.href='/admin/catalog/endpoint/${esc(e.name)}'">
+    <tr>
       <td><div class="t1">${esc(e.display_name || e.name)}</div>
           <div class="t2 mono">${esc(e.name)}</div></td>
-      <td class="mono">${esc(e.method)} ${esc(e.path)}</td>
-      <td>${esc(e.category_label || e.category || '—')}</td>
+      <td>${esc(e.application || '—')}</td>
+      <td><div class="mono"><span class="t2">${esc(baseUrl)}</span>${esc(e.path)}</div>
+          <div class="t2">${esc(e.method)} · ${esc(e.category_label || e.category || 'uncategorised')}</div></td>
       <td>${statusBadge(e.status)}</td>
       <td>${modeBadge(e.response_mode)}</td>
       <td class="num">${e.response_mode === 'whitelist'
         ? `${fmtNum(e.exposed_count)}<span class="t2"> of ${fmtNum(e.field_count)}</span>`
         : '<span class="t2">all</span>'}</td>
       <td class="num">${fmtNum(e.param_count)}</td>
-      <td class="t2">${fmtDate(e.updated_at)}</td>
+      <td class="actions">
+        <a class="btn" href="/admin/catalog/endpoint/${esc(e.name)}">View</a>
+        <a class="btn" href="/admin/studio?endpoint=${esc(e.name)}">Edit</a>
+        <a class="btn" href="/admin/catalog/endpoint/${esc(e.name)}/postman"
+           title="Download a Postman collection for this endpoint">Postman</a>
+      </td>
     </tr>`).join('') || `<tr><td colspan="8" class="empty">
       Nothing matches. ${query.q || query.category || query.status || query.mode
         ? 'Try clearing a filter.' : 'Load a catalogue, or build an endpoint in the Studio.'}</td></tr>`;
 
   const body = `
 ${pageHead('Catalogue', 'Every endpoint and supplier API, as the gateway has them.',
-  `<a class="btn" href="/admin/studio">Open the Studio</a>`)}
+  `<a class="btn" href="/admin/catalog/postman${qs(query)}">Postman collection</a>
+   <a class="btn" href="/admin/studio">Open the Studio</a>`)}
 <div class="tabs">
   <a href="/admin/catalog" aria-current="page">Endpoints</a>
   <a href="/admin/catalog/upstreams">Supplier APIs</a>
@@ -136,8 +148,8 @@ ${pageHead('Catalogue', 'Every endpoint and supplier API, as the gateway has the
 <section class="panel">
   <div class="wrap"><table>
     <thead><tr>
-      <th>Endpoint</th><th>Route</th><th>Category</th><th>Status</th><th>Response</th>
-      <th class="num">Exposed</th><th class="num">Params</th><th>Updated</th>
+      <th>Endpoint</th><th>Application</th><th>Vendors call</th><th>Status</th><th>Response</th>
+      <th class="num">Exposed</th><th class="num">Params</th><th class="actions">Actions</th>
     </tr></thead>
     <tbody>${rows}</tbody>
   </table></div>
@@ -208,7 +220,7 @@ module.exports = { endpointList, upstreamList, CSS, qs, statusBadge, modeBadge, 
 // not be one stray keystroke from changing it, and "what does this endpoint
 // expose?" is asked far more often than "change what it exposes".
 // ---------------------------------------------------------------------------
-function endpointDetail({ admin, flash, e, upstream }) {
+function endpointDetail({ admin, flash, e, upstream, baseUrl }) {
   const row = (k, v) => `<dt>${esc(k)}</dt><dd>${v}</dd>`;
   const mono = (v) => `<span class="mono">${esc(v)}</span>`;
 
@@ -258,7 +270,13 @@ function endpointDetail({ admin, flash, e, upstream }) {
   const body = `
 ${pageHead(e.display_name || e.name, esc(e.description || 'No description.'),
   `<a class="btn" href="/admin/catalog">← Catalogue</a>
+   <a class="btn" href="/admin/catalog/endpoint/${esc(e.name)}/postman">Postman collection</a>
    <a class="btn" href="/admin/studio?endpoint=${esc(e.name)}">Edit in the Studio</a>`)}
+
+${panel('The URL a vendor calls', '', `
+  <div class="fullurl"><span class="m">${esc(e.method)}</span><code>${esc(baseUrl)}${esc(e.path)}</code></div>
+  <p class="hint" style="margin:10px 0 0">The host comes from <a href="/admin/settings">Admin config</a>;
+    the path is this endpoint's. Parameters written as <code>:name</code> are filled in by the caller.</p>`)}
 
 <div class="sum">
   <div class="stat"><div class="l">Status</div><div class="n" style="font-size:15px;margin-top:8px">${statusBadge(e.status)}</div></div>
@@ -271,7 +289,7 @@ ${pageHead(e.display_name || e.name, esc(e.description || 'No description.'),
 
 ${panel('Routing', '', `<dl class="dl">
   ${row('Reference', mono(e.name))}
-  ${row('Vendors call', mono(`${e.method} ${e.path}`))}
+  ${row('Vendors call', mono(`${e.method} ${baseUrl}${e.path}`))}
   ${row('We forward to', mono(`${e.upstream_method || e.method} ${upstream ? upstream.base_url : ''}${e.upstream_path}`))}
   ${row('Supplier API', `<a href="/admin/catalog/upstream/${esc(e.upstream)}">${esc(upstream ? (upstream.display_name || upstream.name) : e.upstream)}</a>`)}
   ${row('Scope required', mono('ep:' + e.name))}
@@ -322,7 +340,7 @@ ${admin.canEdit ? panel('Change its state', '', `
 // ---------------------------------------------------------------------------
 // Detail: one supplier API, with everything built on it
 // ---------------------------------------------------------------------------
-function upstreamDetail({ admin, flash, u, endpoints: eps }) {
+function upstreamDetail({ admin, flash, u, endpoints: eps, baseUrl }) {
   const row = (k, v) => `<dt>${esc(k)}</dt><dd>${v}</dd>`;
   const mono = (v) => `<span class="mono">${esc(v)}</span>`;
 
@@ -330,7 +348,7 @@ function upstreamDetail({ admin, flash, u, endpoints: eps }) {
     <tr class="row" onclick="location.href='/admin/catalog/endpoint/${esc(e.name)}'">
       <td><div class="t1">${esc(e.display_name || e.name)}</div>
           <div class="t2 mono">${esc(e.name)}</div></td>
-      <td class="mono">${esc(e.method)} ${esc(e.path)}</td>
+      <td class="mono"><span class="t2">${esc(baseUrl)}</span>${esc(e.path)}</td>
       <td class="mono t2">${esc(e.upstream_path)}</td>
       <td>${esc(e.category_label || '—')}</td>
       <td>${statusBadge(e.status)}</td>
@@ -359,6 +377,7 @@ function upstreamDetail({ admin, flash, u, endpoints: eps }) {
   const body = `
 ${pageHead(u.display_name || u.name, esc(u.notes || 'A supplier API. Never visible to a vendor.'),
   `<a class="btn" href="/admin/catalog/upstreams">← Supplier APIs</a>
+   <a class="btn" href="/admin/catalog/upstream/${esc(u.name)}/postman">Postman collection</a>
    <a class="btn" href="/admin/studio">Open the Studio</a>`)}
 
 <div class="sum">

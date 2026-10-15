@@ -469,6 +469,44 @@ function buildAdminRouter(logger, deps = {}) {
     next();
   }
 
+  // --- Admin config -------------------------------------------------------
+  const settingsRepo = require('../db/repos/settings');
+  const settingsPage = require('./settingsPage');
+
+  router.get('/settings', async (req, res, next) => {
+    try {
+      const [settings, history] = await Promise.all([
+        settingsRepo.all(), settingsRepo.history(20),
+      ]);
+      res.type('html').send(
+        settingsPage.render({ admin: req.admin, flash: flashOf(req), settings, history })
+      );
+    } catch (err) { next(err); }
+  });
+
+  router.post('/settings', async (req, res) => {
+    if (!req.admin.canEdit) {
+      return res.redirect(303, '/admin/settings?err=' + encodeURIComponent('Your role is read-only here.'));
+    }
+    try {
+      const known = await settingsRepo.all();
+      const changed = [];
+      for (const key of Object.keys(known)) {
+        if (!(key in (req.body || {}))) continue;
+        const next = String(req.body[key] || '').trim();
+        const current = known[key].value || '';
+        if (next === current) continue;
+        await settingsRepo.set(key, next, req.admin.email);
+        changed.push(key);
+      }
+      logger.info({ actor: req.admin.email, changed }, 'admin config changed');
+      res.redirect(303, '/admin/settings?ok=' + encodeURIComponent(
+        changed.length ? `Saved ${changed.join(', ')}.` : 'Nothing changed.'));
+    } catch (err) {
+      res.redirect(303, '/admin/settings?err=' + encodeURIComponent(err.message));
+    }
+  });
+
   const catalogRoutes = require('./catalogRoutes');
   router.use('/catalog', catalogRoutes.build(logger, { flashOf, deps }));
 
