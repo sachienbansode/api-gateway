@@ -210,10 +210,50 @@
     show($('wrapAuthUser'), t === 'basic');
   }
 
+  /**
+   * Show the stored credential.
+   *
+   * Full-access admins only, enforced on the server — this button simply
+   * hides itself when the answer would be 403. Every press is written to
+   * secret_audit with who asked and why, so reading a token is an event
+   * rather than a silent lookup.
+   */
+  $('btnReveal').addEventListener('click', function () {
+    var btn = this;
+    var name = slug($('upName').value);
+    if (!name) { msg('revealNote', 'Save the supplier API first.', true); return; }
+    var reason = window.prompt(
+      'This will be recorded against your name in the credential access log.\n\n' +
+      'What do you need it for?', '');
+    if (reason === null) return;
+    busy(btn, true, 'Reading…');
+    api('/admin/api/upstream/' + encodeURIComponent(name) + '/credential/reveal',
+        { reason: reason, slot: 'value' })
+      .then(function (j) {
+        var box = $('revealBox');
+        box.textContent = j.value;
+        show(box, true);
+        msg('revealNote', 'Recorded in the access log. Hidden again when you leave this page.', false);
+        // Not left on screen indefinitely: a console open on someone's desk is
+        // the most common way a credential walks.
+        clearTimeout(window.__revealTimer);
+        window.__revealTimer = setTimeout(function () {
+          box.textContent = '';
+          show(box, false);
+          msg('revealNote', 'Hidden again.', false);
+        }, 60000);
+      })
+      .catch(function (e) { msg('revealNote', e.message, true); })
+      .then(function () { busy(btn, false); });
+  });
+
   /** What the console is allowed to say about a credential. */
   function renderCredStatus(c) {
     var n = $('credStatus');
     if (!n) return;
+    // Nothing to reveal until something is stored.
+    show($('credTools'), !!(c && c.stored));
+    show($('revealBox'), false);
     if (c && c.stored) {
       n.innerHTML = '';
       n.appendChild(badge('ok', 'stored ' + (c.hint || '••••')));

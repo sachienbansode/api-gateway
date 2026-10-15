@@ -268,6 +268,51 @@ function json(logger, deps = {}) {
     } catch (err) { fail(res, next)(err); }
   });
 
+  /**
+   * Read a stored credential back.
+   *
+   * Full-access admins only — the same people who could change it, rotate it,
+   * or point the upstream somewhere they control. Restricting the READ while
+   * leaving the WRITE open would be theatre.
+   *
+   * POST, not GET: a GET would end up in browser history, in a proxy log, and
+   * in anything that prefetches links.
+   */
+  r.post('/upstream/:name/credential/reveal', async (req, res) => {
+    const fullAccess =
+      req.admin.canEdit &&
+      (req.admin.source === 'env' || (req.admin.pages || []).includes('*'));
+    if (!fullAccess) {
+      return res.status(403).json({
+        error: 'Reading a stored credential needs full administrator access.',
+      });
+    }
+    try {
+      const reason = String((req.body || {}).reason || '').slice(0, 500) || null;
+      const value = await secrets.reveal({
+        upstream: String(req.params.name),
+        slot: String((req.body || {}).slot || 'value'),
+        actor: req.admin.email,
+        reason,
+      });
+      logger?.warn?.(
+        { upstream: req.params.name, actor: req.admin.email, reason },
+        'studio: supplier credential revealed'
+      );
+      // no-store, so it is not written to a disk cache on the way past.
+      res.set('Cache-Control', 'no-store');
+      res.json({ value });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  r.get('/credentials/access', async (req, res, next) => {
+    try {
+      res.json({ access: await secrets.accessLog(25) });
+    } catch (err) { fail(res, next)(err); }
+  });
+
   r.post('/upstream/:name/credential/clear', async (req, res) => {
     try {
       await secrets.clear({ upstream: String(req.params.name), actor: req.admin.email });

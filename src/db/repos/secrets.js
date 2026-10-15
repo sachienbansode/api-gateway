@@ -125,12 +125,48 @@ async function resolveAll(upstream) {
   return out;
 }
 
+/**
+ * Read a stored credential back, deliberately and on the record.
+ *
+ * Separate from resolve() on purpose. resolve() is the request path — it runs
+ * constantly and logs nothing. This runs when a PERSON asks to see a token,
+ * and every call writes a row naming them, the upstream and the reason they
+ * gave. The caller is responsible for checking that they are allowed to.
+ */
+async function reveal({ upstream, slot = 'value', actor, reason = null }) {
+  const r = await db.query(
+    `SELECT key_id, hint FROM gateway.upstream_secrets WHERE upstream = $1 AND slot = $2`,
+    [upstream, slot]
+  );
+  const row = r?.rows?.[0];
+  if (!row) throw new Error('no credential is stored for this upstream');
+
+  const value = await resolve(upstream, slot);
+  // Written BEFORE returning, so a reveal that reaches the caller is a reveal
+  // that is in the log. If the insert fails, nobody sees the token.
+  await db.query(
+    `INSERT INTO gateway.secret_audit (upstream, slot, action, actor, key_id, hint, reason)
+     VALUES ($1,$2,'reveal',$3,$4,$5,$6)`,
+    [upstream, slot, actor, row.key_id, row.hint || null, reason]
+  );
+  return value;
+}
+
 /** Safe to render: is it set, who set it, when — never the value. */
 async function status(upstream = null) {
   const r = await db.query(
     `SELECT * FROM gateway.upstream_credentials
       WHERE ($1::text IS NULL OR upstream = $1) ORDER BY upstream`,
     [upstream]
+  );
+  return r?.rows || [];
+}
+
+async function accessLog(limit = 25) {
+  const r = await db.query(
+    `SELECT occurred_at, actor, upstream, slot, action, reason, hint, key_id
+       FROM gateway.credential_access LIMIT $1`,
+    [limit]
   );
   return r?.rows || [];
 }
@@ -182,4 +218,6 @@ async function rotateAll(actor) {
   return { rotated: done, failed, primary: ring.primary };
 }
 
-module.exports = { set, clear, resolve, resolveAll, status, recentAudit, rotateAll };
+module.exports = {
+  set, clear, resolve, resolveAll, reveal, status, recentAudit, accessLog, rotateAll,
+};

@@ -199,8 +199,13 @@ function render({ admin, bootstrap, flash }) {
             <label for="upAuthSecret">Credential</label>
             <input id="upAuthSecret" type="password" autocomplete="new-password"
                    placeholder="paste the supplier's token" spellcheck="false">
-            <p class="hint" id="credStatus">Encrypted before it is stored, and never shown
-              again. <a href="#" id="envHelp">What protects it?</a></p></div>
+            <p class="hint" id="credStatus">Encrypted before it is stored.
+              <a href="#" id="envHelp">What protects it?</a></p>
+            <div class="tools" id="credTools" style="margin-top:7px">
+              <button type="button" id="btnReveal">Show the stored credential</button>
+              <span class="n" id="revealNote"></span>
+            </div>
+            <div class="key hidden" id="revealBox"></div></div>
           <div class="f" id="wrapAuthUser"><label for="upAuthUser">Username</label>
             <input id="upAuthUser" placeholder="for basic auth" spellcheck="false"></div>
           <div class="f" id="wrapAuthEnv"><label for="upAuthEnv">Or: variable name</label>
