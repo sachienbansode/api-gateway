@@ -33,6 +33,32 @@ SITE_NAME="api-gateway"
 SITE="/etc/nginx/sites-available/$SITE_NAME"
 WEBROOT="/var/www/pravah-acme"
 
+
+# ---------------------------------------------------------------------------
+# IPv6
+#
+# The configs claim our server_name on [::] as well as 0.0.0.0, and that is
+# deliberate: nginx on this machine already listens on [::]:80 and [::]:443 for
+# the other application, and a name we do not claim on IPv6 is a name that
+# block keeps — an IPv6 client asking for our host would be served someone
+# else's site.
+#
+# On a machine WITHOUT IPv6, nginx refuses to start at all: "Address family not
+# supported by protocol". So the lines come out automatically rather than being
+# a thing to remember.
+# ---------------------------------------------------------------------------
+has_ipv6() { [ -f /proc/net/if_inet6 ]; }
+
+install_site() {   # install_site <source-config>
+  cp "$1" "$SITE"
+  if has_ipv6; then
+    note "IPv6 is available — claiming $DOMAIN on [::] too"
+  else
+    note "no IPv6 on this machine — removing the [::] listeners"
+    sed -i '/^\s*listen\s*\[::\]/d' "$SITE"
+  fi
+}
+
 say()  { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 note() { printf '    %s\n' "$*"; }
 fail() { printf '\n\033[31mSTOPPED: %s\033[0m\n' "$*" >&2; exit 1; }
@@ -99,7 +125,7 @@ check_others() {
 # ---------------------------------------------------------------------------
 say "Step 1 — adding our HTTP-only site (nothing else is touched)"
 install -d -m 755 "$WEBROOT/.well-known/acme-challenge"
-cp "$APP_DIR/deploy/nginx-bootstrap.conf" "$SITE"
+install_site "$APP_DIR/deploy/nginx-bootstrap.conf"
 ln -sf "$SITE" "/etc/nginx/sites-enabled/$SITE_NAME"
 nginx -t || fail "the bootstrap config did not pass nginx -t (output above). Nothing was reloaded."
 systemctl reload nginx 2>/dev/null || systemctl start nginx
@@ -140,7 +166,7 @@ fi
 # ---------------------------------------------------------------------------
 say "Step 3 — switching our site to TLS"
 cp "$SITE" "/tmp/$SITE_NAME.before-tls.$(date +%s)" 2>/dev/null || true
-cp "$APP_DIR/deploy/nginx.conf" "$SITE"
+install_site "$APP_DIR/deploy/nginx.conf"
 nginx -t || fail "the TLS config did not pass nginx -t (output above).
      Nothing was reloaded — our site is still serving HTTP and the other
      application is untouched."
