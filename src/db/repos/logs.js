@@ -195,8 +195,116 @@ async function catalogDiff(id) {
   return r?.rows?.[0] || null;
 }
 
+
+// ---------------------------------------------------------------------------
+// Dashboard
+// ---------------------------------------------------------------------------
+
+/**
+ * Calls per bucket, split into succeeded and failed.
+ *
+ * generate_series, not GROUP BY alone: a window with no traffic at 3am must
+ * produce a zero, not a gap. A line that simply skips the quiet hours makes a
+ * flat night look like a busy one.
+ */
+async function series({ since = '24h' } = {}) {
+  const spec = {
+    '1h':  { interval: '1 hour',  step: '5 minutes'  },
+    '24h': { interval: '24 hours', step: '1 hour'    },
+    '7d':  { interval: '7 days',  step: '6 hours'    },
+    '30d': { interval: '30 days', step: '1 day'      },
+  }[since] || { interval: '24 hours', step: '1 hour' };
+
+  const r = await db.query(
+    `WITH buckets AS (
+       SELECT generate_series(
+         date_trunc('minute', now() - interval '${spec.interval}'),
+         date_trunc('minute', now()),
+         interval '${spec.step}') AS t
+     )
+     SELECT b.t AS bucket,
+            count(a.id) FILTER (WHERE a.status < 400)::int  AS ok,
+            count(a.id) FILTER (WHERE a.status >= 400)::int AS failed,
+            coalesce(percentile_disc(0.95) WITHIN GROUP (ORDER BY a.total_ms), 0)::int AS p95_ms
+       FROM buckets b
+       LEFT JOIN gateway.audit_log a
+              ON a.occurred_at >= b.t
+             AND a.occurred_at <  b.t + interval '${spec.step}'
+      GROUP BY b.t ORDER BY b.t`
+  );
+  return r?.rows || [];
+}
+
+/** Busiest endpoints in the window, with how badly each is doing. */
+async function topEndpoints({ since = '24h', limit = 8 } = {}) {
+  const r = await db.query(
+    `SELECT endpoint,
+            count(*)::int                                        AS calls,
+            count(*) FILTER (WHERE status >= 400)::int            AS errors,
+            coalesce(percentile_disc(0.95) WITHIN GROUP (ORDER BY total_ms), 0)::int AS p95_ms
+       FROM gateway.audit_log
+      WHERE endpoint IS NOT NULL ${sinceClause(since)}
+      GROUP BY endpoint ORDER BY calls DESC LIMIT $1`,
+    [limit]
+  );
+  return r?.rows || [];
+}
+
+/**
+ * The endpoints worth worrying about, ranked by 95th percentile.
+ *
+ * Ranked on p95 rather than on the slowest single call, because one 15-second
+ * outlier is an incident and a consistently slow endpoint is a design problem,
+ * and this list is meant to surface the second. A floor of 20 calls keeps an
+ * endpoint that was tried twice off the top of it.
+ */
+async function slowest({ since = '24h', limit = 8, floor = 20 } = {}) {
+  const r = await db.query(
+    `SELECT endpoint,
+            count(*)::int                                        AS calls,
+            coalesce(percentile_disc(0.95) WITHIN GROUP (ORDER BY total_ms), 0)::int AS p95_ms,
+            coalesce(percentile_disc(0.50) WITHIN GROUP (ORDER BY total_ms), 0)::int AS p50_ms
+       FROM gateway.audit_log
+      WHERE endpoint IS NOT NULL ${sinceClause(since)}
+      GROUP BY endpoint HAVING count(*) >= $2
+      ORDER BY p95_ms DESC LIMIT $1`,
+    [limit, floor]
+  );
+  return r?.rows || [];
+}
+
+/** Who is actually calling, and how much of the traffic each accounts for. */
+async function topConsumers({ since = '24h', limit = 6 } = {}) {
+  const r = await db.query(
+    `SELECT vendor_id AS consumer,
+            count(*)::int                                  AS calls,
+            count(*) FILTER (WHERE status >= 400)::int      AS errors,
+            count(DISTINCT endpoint)::int                   AS endpoints
+       FROM gateway.audit_log
+      WHERE vendor_id IS NOT NULL ${sinceClause(since)}
+      GROUP BY vendor_id ORDER BY calls DESC LIMIT $1`,
+    [limit]
+  );
+  return r?.rows || [];
+}
+
+/** What is going wrong, most common first. */
+async function errorBreakdown({ since = '24h', limit = 6 } = {}) {
+  const r = await db.query(
+    `SELECT coalesce(error_code, 'status ' || status::text) AS code,
+            count(*)::int AS n,
+            max(status)::int AS status
+       FROM gateway.audit_log
+      WHERE status >= 400 ${sinceClause(since)}
+      GROUP BY 1 ORDER BY n DESC LIMIT $1`,
+    [limit]
+  );
+  return r?.rows || [];
+}
+
 module.exports = {
   PAGE, SINCE,
   traffic, trafficSummary, trafficFacets, byRequestId,
+  series, topEndpoints, slowest, topConsumers, errorBreakdown,
   changes, changeFacets, catalogDiff,
 };

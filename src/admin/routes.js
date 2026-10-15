@@ -451,16 +451,51 @@ function buildAdminRouter(logger, deps = {}) {
     return false;
   }
 
+  const dashboardPage = require('./dashboardPage');
+
+  /** What the live catalogue exposes, counted from what is actually mounted. */
+  function exposureOf(config) {
+    const eps = config.endpoints || [];
+    const whitelisted = eps.filter((e) => e.response.mode === 'whitelist').length;
+    return {
+      live: eps.length,
+      whitelisted,
+      unfiltered: eps.length - whitelisted,
+      draft: 0, // filled from the database below when there is one
+    };
+  }
+
   router.get('/', async (req, res, next) => {
     try {
-      const since = new Date(Date.now() - 30 * 864e5);
-      const [vendors, health, usage] = await Promise.all([
-        db.isEnabled() ? vendorRepo.listVendorsWithKeys() : [],
-        liveHealth(),
-        db.isEnabled() ? auditRepo.usageSummary({ since }) : [],
-      ]);
+      const since = ['1h', '24h', '7d', '30d'].includes(String(req.query.since))
+        ? String(req.query.since) : '24h';
+      const exposure = exposureOf(cfg());
+
+      // Without a database there is no traffic to show. The page still renders
+      // — the catalogue and the breakers are in memory — rather than erroring,
+      // because "no database" is a configuration state, not a failure.
+      const empty = { calls: 0, errors: 0, consumers: 0, endpoints: 0, p50_ms: 0, p95_ms: 0 };
+      const [summary, series, topEndpoints, slowest, topConsumers, errors, health, draft] =
+        db.isEnabled()
+          ? await Promise.all([
+              logsRepo.trafficSummary({ since }),
+              logsRepo.series({ since }),
+              logsRepo.topEndpoints({ since }),
+              logsRepo.slowest({ since }),
+              logsRepo.topConsumers({ since }),
+              logsRepo.errorBreakdown({ since }),
+              liveHealth(),
+              db.query(`SELECT count(*)::int n FROM gateway.endpoints WHERE status = 'draft'`)
+                .then((r) => r?.rows?.[0]?.n || 0).catch(() => 0),
+            ])
+          : [empty, [], [], [], [], [], await liveHealth(), 0];
+      exposure.draft = draft;
+
       res.type('html').send(
-        pages.overview({ admin: req.admin, flash: flashOf(req), cfg: cfg(), vendors, health, usage })
+        dashboardPage.overviewPage({
+          admin: req.admin, flash: flashOf(req), since, summary, series,
+          topEndpoints, slowest, topConsumers, errors, health, exposure,
+        })
       );
     } catch (err) {
       next(err);
@@ -616,8 +651,26 @@ function buildAdminRouter(logger, deps = {}) {
 
   router.get('/health', async (req, res, next) => {
     try {
+      const smtp = require('../db/repos/platformSmtp');
+      const [health, mail, baseUrl] = await Promise.all([
+        liveHealth(),
+        smtp.ready().catch((e) => ({ ok: false, reason: e.message })),
+        settingsRepo.baseUrl().catch(() => ''),
+      ]);
+      const up = process.uptime();
+      const d = Math.floor(up / 86400);
+      const h = Math.floor((up % 86400) / 3600);
+      const m = Math.floor((up % 3600) / 60);
       res.type('html').send(
-        pages.healthPage({ admin: req.admin, flash: flashOf(req), health: await liveHealth(), cfg: cfg() })
+        dashboardPage.healthPage({
+          admin: req.admin, flash: flashOf(req), health, cfg: cfg(), mail,
+          process: {
+            uptime: d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`,
+            rssMb: Math.round(process.memoryUsage().rss / 1048576),
+            node: process.version,
+          },
+          settingsSource: { baseUrl },
+        })
       );
     } catch (err) {
       next(err);
