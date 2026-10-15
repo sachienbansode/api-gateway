@@ -109,14 +109,44 @@ function requestDiagram(baseUrl) {
 
   <!-- arrows. The return path runs BELOW the lanes rather than across them:
        routed at step 3's height it drew a line straight through that box, which
-       reads as an arrow out of the wrong step. -->
-  <path d="M166 186 L226 186" stroke="var(--ink3)" stroke-width="1.5" marker-end="url(#ar)"/>
-  <path d="M466 139 L486 139" stroke="var(--gold)" stroke-width="1.5" marker-end="url(#arg)"/>
-  <path d="M716 139 L776 139" stroke="var(--gold)" stroke-width="1.5" marker-end="url(#arg)"/>
-  <path d="M851 196 L851 268 L776 268" stroke="var(--ink3)" stroke-width="1.5"
-        fill="none" marker-end="url(#ar)"/>
-  <path d="M601 344 L601 374 L91 374 L91 222" stroke="var(--green)" stroke-width="1.5"
-        fill="none" marker-end="url(#ar)"/>
+       reads as an arrow out of the wrong step.
+
+       Each is drawn twice: a static line, and a short dash travelling along the
+       same path. The dash is what shows DIRECTION — a still diagram with an
+       arrowhead states which way it goes, a moving one makes you see it. The
+       four legs are offset in time so the eye follows one call round the loop
+       rather than watching four things pulse at once. -->
+  <g class="wire">
+    <path id="w1" d="M166 186 L226 186"/>
+    <path id="w2" d="M466 139 L486 139" class="gold"/>
+    <path id="w3" d="M716 139 L776 139" class="gold"/>
+    <path id="w4" d="M851 196 L851 268 L776 268"/>
+    <path id="w5" d="M601 344 L601 374 L91 374 L91 222" class="green"/>
+  </g>
+  <g class="wire heads">
+    <path d="M166 186 L226 186" marker-end="url(#ar)"/>
+    <path d="M466 139 L486 139" class="gold" marker-end="url(#arg)"/>
+    <path d="M716 139 L776 139" class="gold" marker-end="url(#arg)"/>
+    <path d="M851 196 L851 268 L776 268" marker-end="url(#ar)"/>
+    <path d="M601 344 L601 374 L91 374 L91 222" class="green" marker-end="url(#ar)"/>
+  </g>
+  <g class="pulses">
+    <circle r="3.5" class="p-ink"><animateMotion dur="5.5s" repeatCount="indefinite"
+      begin="0s" keyPoints="0;1" keyTimes="0;1" calcMode="linear">
+      <mpath href="#w1"/></animateMotion></circle>
+    <circle r="3.5" class="p-gold"><animateMotion dur="5.5s" repeatCount="indefinite"
+      begin="0.7s" keyPoints="0;1" keyTimes="0;1" calcMode="linear">
+      <mpath href="#w2"/></animateMotion></circle>
+    <circle r="3.5" class="p-gold"><animateMotion dur="5.5s" repeatCount="indefinite"
+      begin="1.4s" keyPoints="0;1" keyTimes="0;1" calcMode="linear">
+      <mpath href="#w3"/></animateMotion></circle>
+    <circle r="3.5" class="p-ink"><animateMotion dur="5.5s" repeatCount="indefinite"
+      begin="2.3s" keyPoints="0;1" keyTimes="0;1" calcMode="linear">
+      <mpath href="#w4"/></animateMotion></circle>
+    <circle r="3.5" class="p-green"><animateMotion dur="5.5s" repeatCount="indefinite"
+      begin="3.1s" keyPoints="0;1" keyTimes="0;1" calcMode="linear">
+      <mpath href="#w5"/></animateMotion></circle>
+  </g>
 
   <text x="196" y="176" class="t" text-anchor="middle">request</text>
   <text x="620" y="370" class="t">only what the whitelist names comes back</text>
@@ -225,6 +255,21 @@ ${panel('If something looks wrong', '', `
 
 <style>
 .flow{width:100%;height:auto;display:block}
+.flow .wire path{fill:none;stroke:var(--ink3);stroke-width:1.5}
+.flow .wire path.gold{stroke:var(--gold)}
+.flow .wire path.green{stroke:var(--green)}
+.flow .wire:not(.heads) path{opacity:.45}
+.flow .pulses circle{filter:none}
+.flow .p-ink{fill:var(--ink2)}
+.flow .p-gold{fill:var(--gold)}
+.flow .p-green{fill:var(--green)}
+/* Motion is the ONLY thing the animation adds; every arrow still carries a
+   head, so nothing is lost when it is switched off. Somebody who has asked
+   their system for less motion has usually asked for a reason. */
+@media (prefers-reduced-motion: reduce){
+  .flow .pulses{display:none}
+  .flow .wire:not(.heads) path{opacity:1}
+}
 .flow .lane{font:700 9.5px var(--sans);fill:var(--ink3);letter-spacing:1.1px}
 .flow .h{font:600 12.5px var(--sans);fill:var(--ink)}
 .flow .s{font:400 11px var(--sans);fill:var(--ink2)}
