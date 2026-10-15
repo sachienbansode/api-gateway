@@ -108,11 +108,6 @@ RESOLVED="$(getent hosts "$DOMAIN" | awk '{print $1}' | head -1 || true)"
 MYIP="$(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null || true)"
 note "$DOMAIN resolves to: ${RESOLVED:-NOTHING}"
 note "this machine's public IP: ${MYIP:-unknown}"
-[ -n "$RESOLVED" ] || fail "$DOMAIN does not resolve — Let's Encrypt has to reach it by name"
-if [ -n "$MYIP" ] && [ "$RESOLVED" != "$MYIP" ]; then
-  note "WARNING: DNS points somewhere other than this machine. The certificate"
-  note "         request will fail unless that address forwards port 80 here."
-fi
 
 check_others() {
   local now
@@ -126,8 +121,39 @@ check_others() {
 }
 
 # ---------------------------------------------------------------------------
+# Is a certificate even needed?
+#
+# Asked BEFORE anything to do with port 80, because the answer makes that
+# whole question moot. A certificate obtained any other way — DNS-01, a
+# wildcard, one your provider issued — is a certificate. The challenge path
+# exists to GET one, not to use one.
+# ---------------------------------------------------------------------------
+NEED_CERT=yes
+if [ -s "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ] \
+   && openssl x509 -checkend 2592000 -noout -in "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" >/dev/null 2>&1; then
+  NEED_CERT=no
+  say "A certificate is already here and good for more than 30 days"
+  note "issued to : $(openssl x509 -noout -subject -in "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" | sed 's/^subject= *//')"
+  note "expires   : $(openssl x509 -noout -enddate -in "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" | cut -d= -f2)"
+  note "Skipping the HTTP challenge setup entirely — it is only needed to issue one."
+else
+  # Only an ISSUANCE needs the name to resolve to this machine. Installing a
+  # config for a certificate you already hold does not.
+  [ -n "$RESOLVED" ] || fail "$DOMAIN does not resolve, and there is no certificate yet.
+     Let's Encrypt has to reach the name to issue one. Fix DNS, or obtain a
+     certificate another way (DNS-01) and run this again."
+  if [ -n "$MYIP" ] && [ "$RESOLVED" != "$MYIP" ]; then
+    note "WARNING: DNS points somewhere other than this machine. An HTTP-01"
+    note "         challenge will fail unless that address forwards port 80 here."
+  fi
+fi
+
+# ---------------------------------------------------------------------------
 # 1. Our own site, HTTP only, so the challenge can be served
 # ---------------------------------------------------------------------------
+if [ "$NEED_CERT" = "no" ]; then
+  say "Step 1 and 2 — not needed, going straight to the TLS config"
+else
 say "Step 1 — adding our HTTP-only site (nothing else is touched)"
 install -d -m 755 "$WEBROOT/.well-known/acme-challenge"
 install_site "$APP_DIR/deploy/nginx-bootstrap.conf"
@@ -192,10 +218,7 @@ fi
 # 2. The certificate
 # ---------------------------------------------------------------------------
 say "Step 2 — the certificate"
-if [ -s "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ] \
-   && openssl x509 -checkend 2592000 -noout -in "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" >/dev/null 2>&1; then
-  note "one is already there and good for more than 30 days — skipping"
-else
+if true; then
   command -v certbot >/dev/null || { apt-get update -qq && apt-get install -y -qq certbot; }
   # --webroot, NOT --nginx: the nginx plugin rewrites config files, and on a
   # machine running someone else's application that is not a thing to let
@@ -205,6 +228,7 @@ else
     || fail "certbot could not issue the certificate (its message is above). Nothing else changed."
 fi
 [ -s "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ] || fail "no certificate on disk after certbot ran"
+fi   # end of "a certificate is needed"
 
 # ---------------------------------------------------------------------------
 # 3. The TLS config
@@ -212,6 +236,10 @@ fi
 say "Step 3 — switching our site to TLS"
 cp "$SITE" "/tmp/$SITE_NAME.before-tls.$(date +%s)" 2>/dev/null || true
 install_site "$APP_DIR/deploy/nginx.conf"
+# Enabling the site lives here as well as in step 1, because step 1 is skipped
+# when a certificate already exists — and a config in sites-available that
+# nothing links to is a config nginx never reads.
+ln -sf "$SITE" "/etc/nginx/sites-enabled/$SITE_NAME"
 nginx -t || fail "the TLS config did not pass nginx -t (output above).
      Nothing was reloaded — our site is still serving HTTP and the other
      application is untouched."
@@ -234,7 +262,14 @@ systemctl enable --now certbot.timer >/dev/null 2>&1 || true
 if certbot renew --dry-run >/dev/null 2>&1; then
   note "the renewal dry run passed"
 else
-  note "WARNING: the renewal dry run did not pass — run 'certbot renew --dry-run' and read it"
+  note "WARNING: the renewal dry run did not pass."
+  note "If this certificate was issued with --manual (DNS-01), that is expected:"
+  note "a manual challenge cannot renew unattended. Either repeat the DNS step"
+  note "every ~60 days, or once port 80 is open to Any, switch to automatic:"
+  note ""
+  note "    sudo certbot certonly --force-renewal --webroot -w $WEBROOT -d $DOMAIN"
+  note ""
+  note "which re-issues over HTTP-01 and renews itself from then on."
 fi
 
 # ---------------------------------------------------------------------------
