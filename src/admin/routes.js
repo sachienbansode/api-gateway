@@ -645,15 +645,93 @@ function buildAdminRouter(logger, deps = {}) {
   const settingsRepo = require('../db/repos/settings');
   const settingsPage = require('./settingsPage');
 
+  const mailRepo = require('../db/repos/mailSettings');
+
   router.get('/settings', async (req, res, next) => {
     try {
-      const [settings, history] = await Promise.all([
+      const [settings, history, mail] = await Promise.all([
         settingsRepo.all(), settingsRepo.history(20),
+        mailRepo.status().catch(() => null),
       ]);
       res.type('html').send(
-        settingsPage.render({ admin: req.admin, flash: flashOf(req), settings, history })
+        settingsPage.render({ admin: req.admin, flash: flashOf(req), settings, history, mail })
       );
     } catch (err) { next(err); }
+  });
+
+  /**
+   * Mail settings.
+   *
+   * Separate from the settings POST above because this is a different shape:
+   * a password that must not be echoed, two checkboxes whose absence is
+   * meaningful, and a Test button that is a second submit of the same form.
+   */
+  function mailInput(body) {
+    return {
+      host: body.host,
+      port: body.port,
+      username: body.username,
+      // An empty box means "keep what is stored" — which is what the
+      // placeholder says and what lets someone change the from-address without
+      // going to find the mailbox password again.
+      password: typeof body.password === 'string' && body.password.length ? body.password : undefined,
+      fromEmail: body.fromEmail,
+      fromName: body.fromName,
+      // An unticked checkbox is ABSENT from a form post, not false. Reading it
+      // as undefined would mean every save silently re-enabled whatever the
+      // person just turned off.
+      secure: body.secure === '1',
+      rejectUnauthorized: body.rejectUnauthorized === '1',
+    };
+  }
+
+  router.post('/settings/mail', async (req, res) => {
+    if (!req.admin.canEdit) {
+      return res.redirect(303, '/admin/settings?err=' + encodeURIComponent('Your role is read-only here.'));
+    }
+    try {
+      await mailRepo.save(mailInput(req.body || {}), req.admin.email);
+      logger.info({ actor: req.admin.email, host: (req.body || {}).host }, 'mail settings changed');
+      res.redirect(303, '/admin/settings?ok=' + encodeURIComponent(
+        'Saved. Press Test connection to check it before anyone needs it.'));
+    } catch (err) {
+      res.redirect(303, '/admin/settings?err=' + encodeURIComponent(err.message));
+    }
+  });
+
+  /**
+   * Open the connection, authenticate, hang up. Sends no message.
+   *
+   * Saves first, so the thing tested is the thing on screen. Testing the
+   * previously saved settings while showing someone the new ones is how a
+   * green tick ends up describing a configuration nobody is using.
+   */
+  router.post('/settings/mail/test', async (req, res) => {
+    if (!req.admin.canEdit) {
+      return res.redirect(303, '/admin/settings?err=' + encodeURIComponent('Your role is read-only here.'));
+    }
+    try {
+      await mailRepo.save(mailInput(req.body || {}), req.admin.email);
+      const smtp = require('../db/repos/platformSmtp');
+      const state = await smtp.ready();
+      if (!state.ok) throw new Error(state.reason);
+
+      const { transport } = await smtp.transportConfig();
+      const nodemailer = require('nodemailer');
+      await nodemailer.createTransport(transport).verify();
+
+      await mailRepo.recordTest({ ok: true });
+      logger.info({ actor: req.admin.email, host: state.host }, 'mail test succeeded');
+      res.redirect(303, '/admin/settings?ok=' + encodeURIComponent(
+        `Connected to ${state.host}. Sign-in codes can be sent.`));
+    } catch (err) {
+      // Recorded as well as shown: the next person to open this screen should
+      // see that it is broken without having to press the button themselves.
+      await mailRepo.recordTest({ ok: false, error: err.message }).catch(() => {});
+      logger.warn({ actor: req.admin.email, err: err.message }, 'mail test failed');
+      res.redirect(303, '/admin/settings?err=' + encodeURIComponent(
+        `Could not connect: ${err.message}`));
+    }
   });
 
   router.post('/settings', async (req, res) => {

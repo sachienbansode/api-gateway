@@ -2,16 +2,25 @@
 
 const crypto = require('crypto');
 const adminDb = require('../adminPool');
+const mailSettings = require('./mailSettings');
 
 /**
  * Where the sign-in code gets emailed from.
  *
- * TWO sources, and the first one is the one to use.
+ * THREE sources, tried in this order.
  *
- * 1. SMTP_* in this server's own env file. Its own mailbox credential,
- *    readable only by this application.
+ * 1. gateway.mail_settings — the Mail panel on Admin config. The one to use.
+ *    Changing a mail server is not a deployment act; it happens when a mailbox
+ *    password is rotated, by whoever owns mail, and should not need SSH and a
+ *    restart. The password is sealed under GW_SECRET_KEY, this product's own
+ *    key.
  *
- * 2. The platform's smtp_settings row, read (never written). Appealing at
+ * 2. SMTP_* in this server's own env file. Its own mailbox credential,
+ *    readable only by this application. Still here because a box has to be
+ *    able to send mail before anyone can sign in to configure it — the
+ *    bootstrap case, and the one to reach for if the console is unreachable.
+ *
+ * 3. The platform's smtp_settings row, read (never written). Appealing at
  *    first glance — one mail configuration, rotated in one place — and the
  *    reason it is NOT the default is worth writing down, because it was the
  *    original design here and it was wrong.
@@ -122,6 +131,21 @@ function invalidate() {
  * receive.
  */
 async function ready() {
+  // The console first. A failure to read it is not fatal — fall through to
+  // the env, which is what a box that has not run migration 012 does.
+  try {
+    const saved = await mailSettings.status();
+    if (saved && saved.host) {
+      if (!saved.from_email) {
+        return { ok: false, reason: 'no from-address is set in Admin config → Mail' };
+      }
+      return {
+        ok: true, host: saved.host, from: saved.from_email, source: 'console',
+        tested: saved.test_status, testedAt: saved.last_tested_at,
+      };
+    }
+  } catch { /* fall through */ }
+
   const local = localConfig();
   if (local) {
     if (!local.from) return { ok: false, reason: 'SMTP_FROM is not set' };
@@ -131,9 +155,10 @@ async function ready() {
     return {
       ok: false,
       reason:
-        'no mail is configured for this gateway. Set SMTP_HOST, SMTP_USER, ' +
-        'SMTP_PASS and SMTP_FROM in /etc/api-gateway/env — the same names the ' +
-        'OFS app uses. (Borrowing the ' +
+        'no mail is configured for this gateway. Set it on the Admin config ' +
+        'screen, under Mail — or, for a box nobody can sign in to yet, set ' +
+        'SMTP_HOST, SMTP_USER, SMTP_PASS and SMTP_FROM in ' +
+        '/etc/api-gateway/env, the same names the OFS app uses. (Borrowing the ' +
         "platform's mail credential instead needs SMTP_FROM_PLATFORM=true and puts " +
         "the platform's API_KEY_SECRET on this server — read why that is a bad trade " +
         'in src/db/repos/platformSmtp.js before doing it.)',
@@ -169,6 +194,20 @@ async function ready() {
 async function transportConfig() {
   const state = await ready();
   if (!state.ok) throw new Error(state.reason);
+
+  const saved = await mailSettings.resolve().catch(() => null);
+  if (saved && saved.host) {
+    return {
+      transport: {
+        host: saved.host,
+        port: saved.port,
+        secure: saved.secure,
+        ...(saved.user ? { auth: { user: saved.user, pass: saved.pass } } : {}),
+        ...(saved.rejectUnauthorized === false ? { tls: { rejectUnauthorized: false } } : {}),
+      },
+      from: `"${saved.fromName}" <${saved.from}>`,
+    };
+  }
 
   const local = localConfig();
   if (local) {
