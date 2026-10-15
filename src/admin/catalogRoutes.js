@@ -4,6 +4,7 @@ const express = require('express');
 const browse = require('../db/repos/browse');
 const studio = require('../db/repos/studio');
 const settings = require('../db/repos/settings');
+const secrets = require('../db/repos/secrets');
 const postman = require('../core/postman');
 const page = require('./catalogPage');
 
@@ -157,6 +158,12 @@ function build(logger, { flashOf, deps = {} } = {}) {
       // rather than widening studio.endpoint(), which the Studio also uses.
       const one = await browse.endpoints({ q: e.name, size: 1 });
       e.vendor_count = one.rows[0] ? one.rows[0].vendor_count : 0;
+      // Whether an endpoint on its own key actually HAS one. Status only —
+      // this view never asks for a value.
+      if (e.auth_mode === 'override') {
+        const cred = (await secrets.statusForEndpoint(e.name).catch(() => []))[0];
+        e.credential_broken = Boolean(cred && cred.broken);
+      }
       const baseUrl = await settings.baseUrl();
       res.type('html').send(
         page.endpointDetail({ admin: req.admin, flash: flashOf(req), e, upstream, baseUrl })

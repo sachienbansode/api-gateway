@@ -17,8 +17,21 @@ const errors = require('./errors');
  *   4. Enforce a hard timeout and a circuit breaker.
  */
 
+/**
+ * The credential a call should actually carry.
+ *
+ * An endpoint may override its upstream's — see 009_endpoint_secrets.sql for
+ * why. The override is total, not a merge: if an endpoint says bearer, it
+ * sends its own bearer token and nothing of the upstream's. A half-inherited
+ * credential would be the worst of both, and impossible to reason about from
+ * the console.
+ */
+function authFor(upstream, endpoint) {
+  return (endpoint && endpoint.auth) || upstream.auth || { type: 'none' };
+}
+
 /** Headers we are willing to construct ourselves. Nothing else travels. */
-function buildUpstreamHeaders(upstream, { requestId, hasBody }) {
+function buildUpstreamHeaders(upstream, { requestId, hasBody, auth: override }) {
   const headers = {
     accept: 'application/json',
     'user-agent': 'api-gateway/1.0',
@@ -27,7 +40,7 @@ function buildUpstreamHeaders(upstream, { requestId, hasBody }) {
   };
   if (hasBody) headers['content-type'] = 'application/json';
 
-  const auth = upstream.auth || { type: 'none' };
+  const auth = override || upstream.auth || { type: 'none' };
   switch (auth.type) {
     case 'bearer':
       headers.authorization = `Bearer ${auth.token}`;
@@ -131,9 +144,12 @@ class UpstreamClient {
       }
     }
 
-    // Upstream's own credential as a query param, if that is its scheme.
-    if (upstream.auth?.type === 'query') {
-      url.searchParams.set(upstream.auth.name, upstream.auth.value);
+    // Our own credential as a query param, if that is the scheme. Set after
+    // the vendor's allowlisted params and after the forced injections, so
+    // neither can displace it.
+    const auth = authFor(upstream, endpoint);
+    if (auth.type === 'query') {
+      url.searchParams.set(auth.name, auth.value);
     }
 
     // Allowlisted body fields plus forced injections.
@@ -149,6 +165,7 @@ class UpstreamClient {
     const headers = buildUpstreamHeaders(upstream, {
       requestId,
       hasBody: payload !== undefined,
+      auth,
     });
 
     const started = Date.now();
@@ -227,4 +244,4 @@ class UpstreamClient {
   }
 }
 
-module.exports = { UpstreamClient, buildUpstreamPath, buildUpstreamHeaders };
+module.exports = { UpstreamClient, buildUpstreamPath, buildUpstreamHeaders, authFor };

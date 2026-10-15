@@ -293,6 +293,13 @@ ${panel('Routing', '', `<dl class="dl">
   ${row('We forward to', mono(`${e.upstream_method || e.method} ${upstream ? upstream.base_url : ''}${e.upstream_path}`))}
   ${row('Supplier API', `<a href="/admin/catalog/upstream/${esc(e.upstream)}">${esc(upstream ? (upstream.display_name || upstream.name) : e.upstream)}</a>`)}
   ${row('Scope required', mono('ep:' + e.name))}
+  ${row('Calls with', e.auth_mode === 'override'
+    ? `<span class="badge warn">its own key</span> <span class="t2">${
+        e.auth_type === 'none'
+          ? 'no credential at all'
+          : `sent as ${esc(e.auth_type || 'bearer')}${e.auth_name ? ` (${esc(e.auth_name)})` : ''}`
+      }${e.credential_broken ? ' — <strong>none is saved, so this endpoint cannot go live</strong>' : ''}</span>`
+    : `<span class="t2">the ${esc(upstream ? (upstream.display_name || upstream.name) : e.upstream)} credential</span>`)}
   ${row('Rate limit', `${fmtNum(e.rate_max)} calls per ${fmtNum(e.rate_window_ms / 1000)}s`)}
   ${row('Idempotency', esc(e.idempotency || 'off'))}
   ${row('Category', esc(e.category || '—'))}

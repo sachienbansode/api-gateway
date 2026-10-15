@@ -203,7 +203,12 @@ function createApp({ logger, config } = {}) {
     // the loader interpolates ${NAME} against the environment, and a token is
     // not something to run through a string rewriter.
     const vaultFailures = await catalog.applyVaultSecrets(
-      next, merged._vaultUpstreams || [], logger
+      next,
+      {
+        upstreams: merged._vaultUpstreams || [],
+        endpoints: merged._vaultEndpoints || [],
+      },
+      logger
     );
 
     // One client throughout, with its upstream set swapped in place, so the
@@ -222,7 +227,10 @@ function createApp({ logger, config } = {}) {
       {
         endpoints: next.endpoints.length,
         upstreams: Object.keys(next.upstreams).length,
-        sealedCredentials: (merged._vaultUpstreams || []).length - vaultFailures.length,
+        sealedCredentials:
+          (merged._vaultUpstreams || []).length +
+          (merged._vaultEndpoints || []).length -
+          vaultFailures.length,
       },
       'catalogue reloaded'
     );
@@ -277,7 +285,11 @@ function createApp({ logger, config } = {}) {
     await db.close();
   }
 
-  return { app, config: cfg, client, observer, audit, vendorStore, start, stop };
+  // reloadCatalog is returned as well as handed to the admin router: a test or
+  // a maintenance script needs to be able to force the swap and then assert on
+  // what is actually being served, and reaching through the HTTP surface to do
+  // that tests the console rather than the gateway.
+  return { app, config: cfg, client, observer, audit, vendorStore, reloadCatalog, start, stop };
 }
 
 module.exports = { createApp };

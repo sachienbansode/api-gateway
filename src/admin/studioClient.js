@@ -474,11 +474,213 @@
     $('epRateWin').value = e.rate_window_ms || 60000;
     $('epDesc').value = e.description || '';
     $('scopePreview').textContent = 'ep:' + (e.name || '…');
+    renderEndpointAuth();
     renderDropdowns();
     var st = $('s2status');
     st.innerHTML = '';
     if (e.path) st.appendChild(badge('mute', (e.method || 'GET') + ' ' + e.path));
   }
+
+  // ---------------------------------------------------------------------
+  // The credential this endpoint calls with
+  //
+  // Two statements, kept apart on purpose: "we hold this key" (the Save key
+  // button, which writes to endpoint_secrets) and "we send this key" (the
+  // radio, which is part of the endpoint and saves with it). Merging them
+  // would mean a paste silently changed what the gateway puts on the wire.
+  // ---------------------------------------------------------------------
+  function epAuthMode() {
+    var r = document.querySelector('input[name=epAuthMode]:checked');
+    return r ? r.value : 'inherit';
+  }
+
+  function renderEndpointAuth() {
+    var e = S.ep || {};
+    var mode = e.auth_mode === 'override' ? 'override' : 'inherit';
+    Array.prototype.forEach.call(document.getElementsByName('epAuthMode'), function (r) {
+      r.checked = r.value === mode;
+    });
+    $('epAuthType').value = e.auth_type || 'bearer';
+    $('epAuthName').value = e.auth_name || '';
+    $('epAuthUser').value = '';
+    // Never prefilled and never sent back by the server. Empty means "leave
+    // whatever is stored alone".
+    $('epAuthSecret').value = '';
+    var inh = $('epAuthInherit');
+    if (inh) {
+      inh.textContent = S.upstream && S.upstream.auth_type && S.upstream.auth_type !== 'none'
+        ? 'the ' + S.upstream.auth_type + ' credential on ' + S.upstream.name
+        : 'whatever is set on the supplier API in step 1';
+    }
+    epAuthVisibility();
+    renderEpCredStatus(S.epCredential || null);
+  }
+
+  function epAuthVisibility() {
+    var on = epAuthMode() === 'override';
+    var t = $('epAuthType').value;
+    show($('epAuthBox'), on);
+    show($('epWrapAuthName'), t === 'header' || t === 'query');
+    show($('epWrapAuthUser'), t === 'basic');
+    show($('epWrapAuthSecret'), t !== 'none');
+  }
+
+  function renderEpCredStatus(c) {
+    var n = $('epCredStatus');
+    if (!n) return;
+    show($('epRevealBox'), false);
+    n.innerHTML = '';
+    if (c && c.secret_stored) {
+      n.appendChild(badge('ok', 'stored ' + (c.secret_hint || '••••').replace(/^\*{4}/, '••••')));
+      if (c.key_id) n.appendChild(badge('mute', 'key ' + c.key_id));
+      n.appendChild(document.createTextNode(
+        '  Encrypted' + (c.set_at ? ' ' + fmtWhen(c.set_at) : '') +
+        (c.set_by ? ' by ' + c.set_by : '') +
+        '. Leave the box empty to keep it; type a new one to replace it.'));
+    } else if (c && c.broken) {
+      n.appendChild(badge('off', 'no key saved'));
+      n.appendChild(document.createTextNode(
+        '  This endpoint is set to use its own key and none is stored, so it ' +
+        'cannot go live. It will not fall back to the supplier credential.'));
+    } else {
+      n.textContent = 'Encrypted with the same key as the supplier credentials. ' +
+        'Never stored in plain text and never sent to a vendor.';
+    }
+  }
+
+  /** Pull the saved status for this endpoint's own key, if it has a name yet. */
+  function loadEpCredential() {
+    var name = slug($('epName').value);
+    if (!name) { S.epCredential = null; renderEpCredStatus(null); return Promise.resolve(); }
+    return api('/admin/api/endpoint/' + encodeURIComponent(name) + '/credential', null, 'GET')
+      .then(function (j) { S.epCredential = j.credential || null; renderEpCredStatus(S.epCredential); })
+      .catch(function () { /* a new endpoint has none; not an error worth showing */ });
+  }
+
+  Array.prototype.forEach.call(document.getElementsByName('epAuthMode'), function (r) {
+    r.addEventListener('change', function () {
+      S.dirty = true;
+      epAuthVisibility();
+      if (epAuthMode() === 'override') loadEpCredential();
+    });
+  });
+  $('epAuthType').addEventListener('change', function () { S.dirty = true; epAuthVisibility(); });
+
+  $('btnSaveEpKey').addEventListener('click', function () {
+    var btn = this, name = slug($('epName').value), token = $('epAuthSecret').value;
+    if (!name) { msg('epCredStatus', 'Save the endpoint first — a key is stored against its reference.', true); return; }
+    if (!token) { msg('epCredStatus', 'Nothing to save. Paste the key above first.', true); return; }
+    dialog({
+      title: 'Save this key',
+      body: 'It is encrypted before it is written and will be used for ' + name +
+            ' only. Any key already stored for this endpoint is replaced.',
+      ok: 'Save it'
+    }).then(function (go) {
+      if (!go) return null;
+      busy(btn, true, 'Saving…');
+      return api('/admin/api/endpoint/' + encodeURIComponent(name) + '/credential', {
+        token: token,
+        username: $('epAuthUser').value.trim() || undefined
+      });
+    }).then(function (j) {
+      if (!j) return;
+      $('epAuthSecret').value = '';
+      $('epAuthUser').value = '';
+      S.epCredential = j.credential || null;
+      renderEpCredStatus(S.epCredential);
+    }).catch(function (e) { msg('epCredStatus', e.message, true); })
+      .then(function () { busy(btn, false); });
+  });
+
+  /**
+   * Try a key against the supplier before committing to it.
+   *
+   * Uses whatever is typed in the box if anything is, otherwise the stored
+   * one. A typed value is sent for this one call and is not written down.
+   */
+  $('btnTestEpKey').addEventListener('click', function () {
+    var btn = this, name = slug($('epName').value);
+    var u = S.upstream || {};
+    if (!u.base_url) { msg('epCredStatus', 'Pick a supplier API in step 1 first.', true); return; }
+    var path = $('epUpPath').value.trim() || $('testPath').value.trim();
+    if (!path) { msg('epCredStatus', 'Fill in the supplier path above, so there is something to call.', true); return; }
+    busy(btn, true, 'Calling…');
+    api('/admin/api/test-credential', {
+      scope: 'endpoint',
+      name: name,
+      upstream: u.name,
+      baseUrl: u.base_url,
+      timeoutMs: u.timeout_ms,
+      path: path,
+      values: testValues(),
+      authType: $('epAuthType').value,
+      authName: $('epAuthName').value.trim() || null,
+      token: $('epAuthSecret').value || undefined,
+      username: $('epAuthUser').value.trim() || undefined
+    }).then(function (j) {
+      var box = $('epKeyRes');
+      box.innerHTML = '';
+      box.appendChild(badge(j.ok ? 'ok' : 'off', j.ok ? 'accepted' : 'refused'));
+      if (j.status) box.appendChild(badge('mute', 'HTTP ' + j.status));
+      if (j.ms) box.appendChild(badge('mute', j.ms + 'ms'));
+      if (j.fields) box.appendChild(badge('mute', j.fields + ' fields'));
+      if (j.error) box.appendChild(document.createTextNode(' ' + j.error));
+      show(box, true);
+    }).catch(function (e) { msg('epCredStatus', e.message, true); })
+      .then(function () { busy(btn, false); });
+  });
+
+  $('btnRevealEpKey').addEventListener('click', function () {
+    var btn = this, name = slug($('epName').value);
+    if (!name) { msg('epCredStatus', 'Save the endpoint first.', true); return; }
+    dialog({
+      title: 'Show this endpoint’s key',
+      body: 'This is recorded against your name in the credential access log, ' +
+            'with whatever you write here.',
+      input: true,
+      placeholder: 'What do you need it for?',
+      note: 'The value is cleared from the screen after a minute.',
+      ok: 'Show it'
+    }).then(function (reason) {
+      if (reason === null) return null;
+      busy(btn, true, 'Reading…');
+      return api('/admin/api/endpoint/' + encodeURIComponent(name) + '/credential/reveal',
+                 { reason: reason, slot: 'value' });
+    }).then(function (j) {
+      if (!j) return;
+      var box = $('epRevealBox');
+      box.textContent = j.value;
+      show(box, true);
+      clearTimeout(window.__epRevealTimer);
+      window.__epRevealTimer = setTimeout(function () {
+        box.textContent = '';
+        show(box, false);
+      }, 60000);
+    }).catch(function (e) { msg('epCredStatus', e.message, true); })
+      .then(function () { busy(btn, false); });
+  });
+
+  $('btnClearEpKey').addEventListener('click', function () {
+    var btn = this, name = slug($('epName').value);
+    if (!name) { msg('epCredStatus', 'Nothing to remove.', true); return; }
+    dialog({
+      title: 'Remove this key',
+      body: 'The stored key for ' + name + ' is deleted. If this endpoint is set to ' +
+            'use its own key it will stop being served until a new one is saved — it ' +
+            'does not fall back to the supplier credential.',
+      danger: true,
+      ok: 'Remove it'
+    }).then(function (go) {
+      if (!go) return null;
+      busy(btn, true, 'Removing…');
+      return api('/admin/api/endpoint/' + encodeURIComponent(name) + '/credential/clear', {});
+    }).then(function (j) {
+      if (!j) return;
+      S.epCredential = j.credential || null;
+      renderEpCredStatus(S.epCredential);
+    }).catch(function (e) { msg('epCredStatus', e.message, true); })
+      .then(function () { busy(btn, false); });
+  });
 
   $('epName').addEventListener('input', function () {
     this.value = slug(this.value);
@@ -716,12 +918,18 @@
     });
   }
 
-  $('btnTestEp').addEventListener('click', function () {
-    var btn = this;
+  /** The sample values typed into step 4, keyed by parameter name. */
+  function testValues() {
     var values = {};
     S.params.forEach(function (p) {
       if (p.source === 'vendor' && p.name) values[p.name] = p.testValue || p.example || '';
     });
+    return values;
+  }
+
+  $('btnTestEp').addEventListener('click', function () {
+    var btn = this;
+    var values = testValues();
     busy(btn, true, 'Running…');
     show($('s4err'), false);
     show($('s4res'), true);
@@ -738,7 +946,12 @@
         if (f.exposed && f.rename_to) acc[f.path] = f.rename_to;
         return acc;
       }, {}),
-      endpoint: S.ep && S.ep.name ? S.ep.name : null
+      endpoint: S.ep && S.ep.name ? S.ep.name : null,
+      // So the final test exercises the credential the live call would use,
+      // not the supplier-wide one this endpoint may have been moved off.
+      authMode: epAuthMode(),
+      authType: $('epAuthType').value,
+      authName: $('epAuthName').value.trim() || null
     }).then(function (j) {
       var r = j.result, res = $('s4res');
       res.innerHTML = '';
@@ -788,6 +1001,9 @@
         : [],
       rateMax: Number($('epRateMax').value) || 60,
       rateWindowMs: Number($('epRateWin').value) || 60000,
+      authMode: epAuthMode(),
+      authType: epAuthMode() === 'override' ? $('epAuthType').value : null,
+      authName: epAuthMode() === 'override' ? ($('epAuthName').value.trim() || null) : null,
       params: S.params.map(function (p) {
         return {
           name: p.name, location: p.location, source: p.source, dataType: p.data_type,
@@ -943,9 +1159,11 @@
     } else {
       $('testPath').value = '';
     }
+    S.epCredential = null;
     renderBar();
     renderUpstream();
     renderEndpoint();
+    if (e && e.auth_mode === 'override') loadEpCredential();
     setMode(S.mode, false);
     renderParams();
     renderFields();

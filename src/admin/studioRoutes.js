@@ -50,6 +50,8 @@ const MIGRATION_FOR = {
   upstream_secrets: '004_upstream_secrets.sql',
   secret_audit: '004_upstream_secrets.sql',
   upstream_credentials: '004_upstream_secrets.sql',
+  endpoint_secrets: '009_endpoint_secrets.sql',
+  endpoint_credentials: '009_endpoint_secrets.sql',
   payload_check: '005_no_payloads.sql',
 };
 
@@ -338,6 +340,107 @@ function json(logger, deps = {}) {
     }
   });
 
+  // -------------------------------------------------------------------------
+  // Endpoint-scoped credentials.
+  //
+  // Same four operations as the upstream ones above, same encryption, same
+  // audit table, same reveal policy. What differs is the blast radius: a token
+  // stored here reaches exactly one endpoint.
+  //
+  // Saving a key does NOT by itself change which key the endpoint calls with.
+  // That is `authMode` on the endpoint row, saved with the rest of the
+  // endpoint in step 2, because "we hold this key" and "we send this key" are
+  // separate statements and a paste should not silently make the second one.
+  // -------------------------------------------------------------------------
+  r.get('/endpoint/:name/credential', async (req, res, next) => {
+    try {
+      const name = String(req.params.name);
+      res.json({
+        keySet: secretbox.enabled(),
+        credential: (await secrets.statusForEndpoint(name))[0] || null,
+      });
+    } catch (err) { fail(res, next)(err); }
+  });
+
+  r.post('/endpoint/:name/credential', async (req, res) => {
+    try {
+      const name = String(req.params.name);
+      const body = req.body || {};
+      const token = String(body.token || '');
+      if (!token) return res.status(400).json({ error: 'nothing to save' });
+      if (!secretbox.enabled()) {
+        return res.status(400).json({
+          error: 'GW_SECRET_KEY is not set on this server, so a credential cannot be ' +
+            'encrypted. Set it in /etc/api-gateway/env and restart.',
+        });
+      }
+      const sealed = await secrets.setForEndpoint({
+        endpoint: name, plaintext: token, actor: req.admin.email,
+      });
+      if (body.username) {
+        await secrets.setForEndpoint({
+          endpoint: name, slot: 'username', plaintext: String(body.username),
+          actor: req.admin.email,
+        });
+      }
+      if (deps.reloadCatalog) await deps.reloadCatalog().catch(() => {});
+      logger?.info?.(
+        { endpoint: name, actor: req.admin.email, rotated: sealed.rotated },
+        'studio: endpoint credential saved'
+      );
+      res.json({
+        saved: true,
+        rotated: sealed.rotated,
+        hint: sealed.hint ? `••••${sealed.hint}` : '••••',
+        credential: (await secrets.statusForEndpoint(name))[0] || null,
+      });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  r.post('/endpoint/:name/credential/reveal', async (req, res) => {
+    if (!mayReveal(req.admin)) {
+      return res.status(403).json({
+        error: 'Reading a stored credential is restricted on this server ' +
+          `(CREDENTIAL_REVEAL=${process.env.CREDENTIAL_REVEAL}).`,
+      });
+    }
+    try {
+      const reason = String((req.body || {}).reason || '').slice(0, 500) || null;
+      const value = await secrets.revealForEndpoint({
+        endpoint: String(req.params.name),
+        slot: String((req.body || {}).slot || 'value'),
+        actor: req.admin.email,
+        reason,
+      });
+      logger?.warn?.(
+        { endpoint: req.params.name, actor: req.admin.email, role: req.admin.role, reason },
+        'studio: endpoint credential revealed'
+      );
+      res.set('Cache-Control', 'no-store');
+      res.json({ value });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  r.post('/endpoint/:name/credential/clear', async (req, res) => {
+    try {
+      const name = String(req.params.name);
+      await secrets.clearForEndpoint({ endpoint: name, actor: req.admin.email });
+      await secrets.clearForEndpoint({ endpoint: name, slot: 'username', actor: req.admin.email })
+        .catch(() => {});
+      if (deps.reloadCatalog) await deps.reloadCatalog().catch(() => {});
+      res.json({
+        cleared: true,
+        credential: (await secrets.statusForEndpoint(name))[0] || null,
+      });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
   r.post('/credentials/rotate', async (req, res) => {
     try {
       const out = await secrets.rotateAll(req.admin.email);
@@ -386,6 +489,97 @@ function json(logger, deps = {}) {
       );
       // The sample body goes back to the admin's own browser and no further.
       res.json({ result, fields });
+    } catch (err) { fail(res, next)(err); }
+  });
+
+  /**
+   * Make one real call with a specific credential, and say whether it worked.
+   *
+   * This is the "Test" next to a key, and it answers the only question that
+   * matters when you paste a token: does the supplier accept THIS one, for
+   * THIS path. It is deliberately separate from /test-upstream, which always
+   * uses whatever the supplier-wide credential currently is.
+   *
+   * `token` may be a value that has not been saved. That is the point — a key
+   * you can try before you commit it is a key you do not publish broken. It is
+   * used for this one call and discarded: not written to the database, not
+   * logged, and not echoed back. The test RECORD keeps the status and latency,
+   * never the credential.
+   */
+  r.post('/test-credential', async (req, res, next) => {
+    try {
+      const b = req.body || {};
+      const scope = b.scope === 'endpoint' ? 'endpoint' : 'upstream';
+      const name = String(b.name || '');
+      const filled = tester.fillPath(b.path || '', b.values || {});
+      if (filled.missing.length) {
+        return res.status(400).json({
+          error: `fill in ${filled.missing.join(', ')} before running the test`,
+        });
+      }
+
+      // A typed token beats a stored one, so "test before save" works. When
+      // none is typed we read the stored one server-side; it never travels to
+      // the browser in either direction.
+      let sealed = null;
+      const typed = typeof b.token === 'string' && b.token.length ? b.token : null;
+      if (typed) {
+        sealed = { value: typed };
+        if (b.username) sealed.username = String(b.username);
+      } else if (name) {
+        sealed = await (scope === 'endpoint'
+          ? secrets.resolveAllForEndpoint(name)
+          : secrets.resolveAll(name)
+        ).catch(() => null);
+      }
+      if (!sealed || !sealed.value) {
+        return res.status(400).json({
+          error: typed
+            ? 'the key you typed is empty'
+            : 'no key is saved for this ' + scope + ' — paste one above to try it first',
+        });
+      }
+
+      const result = await tester.callUpstream({
+        baseUrl: b.baseUrl,
+        path: filled.path,
+        timeoutMs: b.timeoutMs,
+        secrets: sealed,
+        upstream: { auth_type: b.authType || 'bearer', auth_name: b.authName || null },
+      });
+
+      await studio.recordTest({
+        kind: scope === 'endpoint' ? 'endpoint' : 'upstream',
+        endpoint: scope === 'endpoint' ? name || null : null,
+        upstream: scope === 'upstream' ? name || null : b.upstream || null,
+        actor: req.admin.email,
+        requestUrl: result.url,
+        status: result.status,
+        latencyMs: result.ms,
+        ok: result.ok === true,
+        error: result.error,
+        fieldCount: result.body ? tester.discover(result.body).length : 0,
+      }).catch(() => {});
+
+      logger?.info?.(
+        {
+          scope, name, actor: req.admin.email, status: result.status, ms: result.ms,
+          credential: typed ? 'typed' : 'stored',
+        },
+        'studio: credential test'
+      );
+
+      // Status, timing and field count only. The supplier's body is not
+      // returned here: this screen is about whether the key is accepted, and
+      // step 4 is where a body is examined.
+      res.json({
+        ok: result.ok === true,
+        status: result.status,
+        ms: result.ms,
+        url: result.url,
+        error: result.error || null,
+        fields: result.body ? tester.discover(result.body).length : 0,
+      });
     } catch (err) { fail(res, next)(err); }
   });
 
@@ -461,20 +655,35 @@ function json(logger, deps = {}) {
           error: `fill in ${filled.missing.join(', ')} before running the test`,
         });
       }
-      const sealed = (b.upstream || {}).name
-        ? await secrets.resolveAll(b.upstream.name).catch(() => null)
-        : null;
+      // Step 4 has to exercise the credential the LIVE call would use, or it
+      // is testing something the gateway will never do. An endpoint in
+      // override mode uses its own key and its own scheme; everything else
+      // uses the supplier's.
+      const override = b.authMode === 'override';
+      const sealed = override
+        ? await secrets.resolveAllForEndpoint(b.endpoint).catch(() => null)
+        : (b.upstream || {}).name
+          ? await secrets.resolveAll(b.upstream.name).catch(() => null)
+          : null;
+      if (override && b.authType !== 'none' && !(sealed && sealed.value)) {
+        return res.status(400).json({
+          error: 'this endpoint is set to use its own key, but no key has been saved ' +
+            'for it yet — save one in step 1 before testing',
+        });
+      }
       const result = await tester.callUpstream({
         baseUrl: (b.upstream || {}).baseUrl,
         path: filled.path,
         timeoutMs: (b.upstream || {}).timeoutMs,
         secrets: sealed,
-        upstream: {
-          auth_type: (b.upstream || {}).authType,
-          auth_name: (b.upstream || {}).authName,
-          auth_value_env: (b.upstream || {}).authValueEnv,
-          auth_user_env: (b.upstream || {}).authUserEnv,
-        },
+        upstream: override
+          ? { auth_type: b.authType || 'bearer', auth_name: b.authName || null }
+          : {
+              auth_type: (b.upstream || {}).authType,
+              auth_name: (b.upstream || {}).authName,
+              auth_value_env: (b.upstream || {}).authValueEnv,
+              auth_user_env: (b.upstream || {}).authUserEnv,
+            },
       });
       const upstreamFields = result.body ? tester.discover(result.body).length : 0;
       const projection = result.body

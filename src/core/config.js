@@ -119,6 +119,38 @@ function allowEmpty() {
   return String(process.env.ALLOW_EMPTY_CONFIG || 'false').toLowerCase() === 'true';
 }
 
+/**
+ * Check one auth block, wherever it came from.
+ *
+ * Used for an upstream's credential and for an endpoint's override of it, so
+ * the two can never drift: a shape that is valid on a supplier is valid on one
+ * of its endpoints, and the error text says which it was complaining about.
+ *
+ * Returns the block unchanged. It validates; it does not normalise, because
+ * the sealed-credential path replaces the VALUES afterwards and a normaliser
+ * that moved them around would make that substitution harder to follow.
+ */
+function validateAuth(auth, at) {
+  if (!auth || typeof auth !== 'object') {
+    throw new ConfigError(`${at}: auth must be a block with a type`);
+  }
+  if (!VALID_UPSTREAM_AUTH.has(auth.type)) {
+    throw new ConfigError(
+      `${at}: auth.type "${auth.type}" is not one of ${[...VALID_UPSTREAM_AUTH].join(', ')}`
+    );
+  }
+  if (auth.type === 'bearer' && !auth.token) {
+    throw new ConfigError(`${at}: auth.type bearer requires a token`);
+  }
+  if ((auth.type === 'header' || auth.type === 'query') && (!auth.name || !auth.value)) {
+    throw new ConfigError(`${at}: auth.type ${auth.type} requires name and value`);
+  }
+  if (auth.type === 'basic' && (!auth.username || auth.password === undefined)) {
+    throw new ConfigError(`${at}: auth.type basic requires username and password`);
+  }
+  return auth;
+}
+
 function loadUpstreams() {
   const raw = readYaml('upstreams.yaml');
   const src = raw.upstreams || {};
@@ -143,21 +175,7 @@ function loadUpstreams() {
       throw new ConfigError(`upstream "${id}": baseUrl must be http or https`);
     }
 
-    const auth = def.auth || { type: 'none' };
-    if (!VALID_UPSTREAM_AUTH.has(auth.type)) {
-      throw new ConfigError(
-        `upstream "${id}": auth.type "${auth.type}" is not one of ${[...VALID_UPSTREAM_AUTH].join(', ')}`
-      );
-    }
-    if (auth.type === 'bearer' && !auth.token) {
-      throw new ConfigError(`upstream "${id}": auth.type bearer requires a token`);
-    }
-    if ((auth.type === 'header' || auth.type === 'query') && (!auth.name || !auth.value)) {
-      throw new ConfigError(`upstream "${id}": auth.type ${auth.type} requires name and value`);
-    }
-    if (auth.type === 'basic' && (!auth.username || auth.password === undefined)) {
-      throw new ConfigError(`upstream "${id}": auth.type basic requires username and password`);
-    }
+    const auth = validateAuth(def.auth || { type: 'none' }, `upstream "${id}"`);
 
     out[id] = {
       id,
@@ -358,11 +376,25 @@ function loadEndpoints(upstreams) {
       );
     }
 
+    // -------------------------------------------------------------------
+    // An endpoint may carry its own credential instead of the upstream's.
+    //
+    // Same rules as an upstream's auth block, checked by the same function,
+    // because an endpoint override that is accepted here and rejected there
+    // would be a difference nobody could explain. See
+    // 009_endpoint_secrets.sql for why this exists at all.
+    //
+    // `auth: {type: none}` is a real and useful override: one unauthenticated
+    // route on a host where everything else needs a token.
+    // -------------------------------------------------------------------
+    const epAuth = ep.auth ? validateAuth(ep.auth, at) : null;
+
     return {
       name: ep.name,
       path: ep.path,
       method,
       upstream: ep.upstream,
+      ...(epAuth ? { auth: epAuth } : {}),
       upstreamPath: ep.upstreamPath,
       upstreamMethod: String(ep.upstreamMethod || method).toUpperCase(),
       scopes,

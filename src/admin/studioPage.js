@@ -85,6 +85,16 @@ const STUDIO_CSS = `
   padding:6px 10px;font:inherit;font-size:11.5px;background:var(--surface2);color:var(--ink)}
 .tools .n{font-size:11px;color:var(--ink3)}
 
+/* A two-option choice where each option needs a sentence of explanation —
+   a select would hide the consequence behind a click. */
+.radios{display:grid;gap:8px}
+.radios label{display:flex;gap:9px;align-items:flex-start;padding:9px 11px;cursor:pointer;
+  border:1px solid var(--border);border-radius:var(--r);background:var(--surface2)}
+.radios label:has(input:checked){border-color:var(--ink);background:var(--surface)}
+.radios input{margin-top:2px;flex:none}
+.radios b{display:block;font-size:12px;font-weight:600}
+.radios em{display:block;font-style:normal;font-size:11px;color:var(--ink3);margin-top:2px}
+
 .split{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 @media(max-width:1100px){.split{grid-template-columns:1fr}.stu{grid-template-columns:1fr}.rail{display:none}}
 .jsonbox{border:1px solid var(--border);border-radius:var(--r);overflow:hidden}
@@ -240,7 +250,11 @@ function render({ admin, bootstrap, flash }) {
             <input type="search" id="testPath" placeholder="/Market/api/CompanyMaster"
                    spellcheck="false" style="font-family:var(--mono)">
             <button type="button" id="btnTestUp">Call the supplier</button>
+            <button type="button" id="btnTestKey">Test this key</button>
           </div>
+          <p class="hint">"Test this key" uses whatever is typed in Credential above,
+            without saving it — so you can find out whether a token works before it
+            becomes the one this gateway sends. Leave it blank to test the saved one.</p>
           <div class="res hidden" id="s1res"></div>
           <div class="jsonbox hidden" id="s1box">
             <div class="jh"><span>What the supplier returned</span>
@@ -290,6 +304,64 @@ function render({ admin, bootstrap, flash }) {
           <div class="f" style="grid-column:span 2"><label for="epDesc">Description</label>
             <input id="epDesc" placeholder="Shown in the vendor-facing API documentation"></div>
         </div>
+
+        <!-- ------------------------------------------------------------
+             Which credential THIS endpoint calls with.
+
+             Almost always the supplier's. The override exists for metered
+             products, staged token migrations, and keeping the blast radius
+             of a leaked key down to one endpoint — see
+             009_endpoint_secrets.sql.
+             ------------------------------------------------------------ -->
+        <fieldset>
+          <legend>Key this endpoint calls with</legend>
+          <div class="radios" id="epAuthMode">
+            <label><input type="radio" name="epAuthMode" value="inherit" checked>
+              <span><b>The supplier's key</b><em id="epAuthInherit">whatever is set on the supplier
+                API in step 1</em></span></label>
+            <label><input type="radio" name="epAuthMode" value="override">
+              <span><b>A key just for this endpoint</b><em>stored encrypted, used for this
+                endpoint only, and never for its siblings</em></span></label>
+          </div>
+
+          <div id="epAuthBox" class="hidden" style="margin-top:12px">
+            <div class="fields">
+              <div class="f"><label for="epAuthType">How it is sent</label>
+                <select id="epAuthType">
+                  <option value="bearer">Bearer token</option>
+                  <option value="header">Custom header</option>
+                  <option value="query">Query parameter</option>
+                  <option value="basic">Basic auth</option>
+                  <option value="none">No credential at all</option>
+                </select>
+                <p class="hint">May differ from the supplier's scheme.</p></div>
+              <div class="f" id="epWrapAuthName"><label for="epAuthName">Header / parameter name</label>
+                <input id="epAuthName" placeholder="x-api-key" spellcheck="false"></div>
+              <div class="f" id="epWrapAuthUser"><label for="epAuthUser">Username</label>
+                <input id="epAuthUser" placeholder="for basic auth" spellcheck="false"></div>
+              <div class="f" id="epWrapAuthSecret" style="grid-column:span 2">
+                <label for="epAuthSecret">Key / token</label>
+                <input id="epAuthSecret" type="password" autocomplete="new-password"
+                       placeholder="paste the key for this endpoint" spellcheck="false">
+                <p class="hint" id="epCredStatus">Encrypted with the same key as the supplier
+                  credentials. Never stored in plain text and never sent to a vendor.</p>
+                <div class="tools" style="margin-top:7px">
+                  <button type="button" id="btnSaveEpKey">Save key</button>
+                  <button type="button" id="btnTestEpKey">Test key</button>
+                  <button type="button" id="btnRevealEpKey">Show saved key</button>
+                  <button type="button" id="btnClearEpKey">Remove key</button>
+                </div>
+                <div class="key hidden" id="epRevealBox"></div>
+                <div class="res hidden" id="epKeyRes"></div>
+              </div>
+            </div>
+            <p class="hint">Saving the key and switching this endpoint onto it are two
+              separate actions: the key is saved by the button above, the switch by
+              saving the endpoint. An endpoint set to use its own key cannot go live
+              until a key exists — it will not quietly fall back to the supplier's.</p>
+          </div>
+        </fieldset>
+
         <div class="err-inline hidden" id="s2err"></div>
       </div>
     </section>

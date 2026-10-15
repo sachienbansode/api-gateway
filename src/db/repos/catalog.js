@@ -143,21 +143,31 @@ function upstreamToManifest(row) {
  * the reload down: the rest of the catalogue has nothing to do with it. The
  * returned `failed` list is for the caller to log — loudly.
  */
-async function applyVaultSecrets(cfg, vaultUpstreams, logger) {
+/** Put one decrypted value into an auth block, whatever its scheme. */
+function fillAuth(auth, secrets) {
+  const value = secrets.value;
+  if (!value) throw new Error('no credential is stored');
+  if (auth.type === 'bearer') auth.token = value;
+  else if (auth.type === 'header' || auth.type === 'query') auth.value = value;
+  else if (auth.type === 'basic') {
+    auth.password = value;
+    if (secrets.username) auth.username = secrets.username;
+  }
+}
+
+async function applyVaultSecrets(cfg, scoped, logger) {
+  // Accepts the old positional array as well as {upstreams, endpoints}, so a
+  // caller that has not been updated still gets correct upstream behaviour
+  // rather than silently filling nothing.
+  const vaultUpstreams = Array.isArray(scoped) ? scoped : scoped?.upstreams || [];
+  const vaultEndpoints = Array.isArray(scoped) ? [] : scoped?.endpoints || [];
+
   const failed = [];
   for (const name of vaultUpstreams) {
     const up = cfg.upstreams && cfg.upstreams[name];
     if (!up || !up.auth) continue;
     try {
-      const secrets = await secretRepo.resolveAll(name);
-      const value = secrets.value;
-      if (!value) throw new Error('no credential is stored for this upstream');
-      if (up.auth.type === 'bearer') up.auth.token = value;
-      else if (up.auth.type === 'header' || up.auth.type === 'query') up.auth.value = value;
-      else if (up.auth.type === 'basic') {
-        up.auth.password = value;
-        if (secrets.username) up.auth.username = secrets.username;
-      }
+      fillAuth(up.auth, await secretRepo.resolveAll(name));
     } catch (err) {
       failed.push({ upstream: name, error: err.message });
       // Leaving the placeholder in place would send the literal string
@@ -169,6 +179,29 @@ async function applyVaultSecrets(cfg, vaultUpstreams, logger) {
       logger?.error?.(
         { upstream: name, err: err.message },
         'could not decrypt this upstream credential — its endpoints are not being served'
+      );
+    }
+  }
+
+  // Endpoint-scoped credentials. One failure removes ONE endpoint; its
+  // siblings on the same upstream are unaffected, which is the entire reason
+  // for scoping a credential this narrowly in the first place.
+  //
+  // Note what is NOT done here: falling back to the upstream's token. An
+  // override exists because the wider credential must not be used for this
+  // call, so an endpoint whose own credential cannot be read goes dark.
+  for (const name of vaultEndpoints) {
+    const ep = (cfg.endpoints || []).find((e) => e.name === name);
+    if (!ep || !ep.auth) continue;
+    try {
+      fillAuth(ep.auth, await secretRepo.resolveAllForEndpoint(name));
+    } catch (err) {
+      failed.push({ endpoint: name, error: err.message });
+      cfg.endpoints = cfg.endpoints.filter((e) => e.name !== name);
+      logger?.error?.(
+        { endpoint: name, err: err.message },
+        'could not decrypt this endpoint credential — the endpoint is not being served. ' +
+          'It is NOT falling back to the supplier credential.'
       );
     }
   }
@@ -200,6 +233,24 @@ function endpointToManifest(row) {
   if (row.response_mode === 'passthrough') ep.response.acknowledgeUnfiltered = true;
   if (row.idempotency) ep.idempotency = row.idempotency;
   else if (!isWrite) ep.idempotency = 'off';
+
+  // An endpoint that carries its own credential. The VALUE is the placeholder
+  // here for the same reason an upstream's is: the loader interpolates
+  // ${NAME} against the environment, and a real token must not go through a
+  // string rewriter. applyVaultSecrets() puts it in after validation.
+  if (row.auth_mode === 'override') {
+    const type = row.auth_type || 'none';
+    const auth = { type };
+    if (type === 'bearer') auth.token = VAULT_PLACEHOLDER;
+    else if (type === 'header' || type === 'query') {
+      auth.name = row.auth_name;
+      auth.value = VAULT_PLACEHOLDER;
+    } else if (type === 'basic') {
+      auth.username = VAULT_PLACEHOLDER;
+      auth.password = VAULT_PLACEHOLDER;
+    }
+    ep.auth = auth;
+  }
   return ep;
 }
 
@@ -234,9 +285,16 @@ async function toManifest() {
   const endpoints = live.map(endpointToManifest);
   const liveNames = new Set(live.map((e) => e.name));
 
+  // Endpoints whose credential has to be unsealed before they can be called.
+  // 'none' is an override too — "call this one unauthenticated" — but it has
+  // no secret to fetch.
+  const vaultEndpoints = live
+    .filter((e) => e.auth_mode === 'override' && e.auth_type && e.auth_type !== 'none')
+    .map((e) => e.name);
+
   return {
     upstreams, endpoints, vendorScopes: vmap, liveEndpointNames: liveNames,
-    vaultUpstreams, scopeFor,
+    vaultUpstreams, vaultEndpoints, scopeFor,
   };
 }
 
@@ -268,6 +326,7 @@ async function mergeWithFiles(files) {
     // Not read by the validator; carried so the caller can act on them.
     _shadowed: shadowed,
     _vaultUpstreams: dbm.vaultUpstreams,
+    _vaultEndpoints: dbm.vaultEndpoints,
   };
 }
 

@@ -232,9 +232,11 @@ async function saveEndpoint(row, actor) {
          (name, application, display_name, category, api_type, description, method, path,
           upstream, upstream_path, upstream_method, response_mode, response_exclude,
           acknowledge_unfiltered, request_query, request_body, rate_window_ms, rate_max,
-          idempotency, frequency, refresh_at, sample_path, status, enabled, notes, updated_by)
+          idempotency, frequency, refresh_at, sample_path, status, enabled, notes, updated_by,
+          auth_mode, auth_type, auth_name)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,
-               COALESCE($23,'draft'),$24,$25,$26)
+               COALESCE($23,'draft'),$24,$25,$26,
+               COALESCE($27,'inherit'),$28,$29)
        ON CONFLICT (name) DO UPDATE SET
          application=EXCLUDED.application, display_name=EXCLUDED.display_name,
          category=EXCLUDED.category, api_type=EXCLUDED.api_type,
@@ -248,6 +250,8 @@ async function saveEndpoint(row, actor) {
          idempotency=EXCLUDED.idempotency, frequency=EXCLUDED.frequency,
          refresh_at=EXCLUDED.refresh_at, sample_path=EXCLUDED.sample_path,
          enabled=EXCLUDED.enabled, notes=EXCLUDED.notes,
+         auth_mode=EXCLUDED.auth_mode, auth_type=EXCLUDED.auth_type,
+         auth_name=EXCLUDED.auth_name,
          updated_at=now(), updated_by=EXCLUDED.updated_by
        RETURNING *`,
       [
@@ -259,6 +263,7 @@ async function saveEndpoint(row, actor) {
         row.idempotency || null, row.frequency || null, row.refreshAt || null,
         row.samplePath || null, row.status || null, row.enabled !== false,
         row.notes || null, actor,
+        row.authMode || null, row.authType || null, row.authName || null,
       ]
     );
 
@@ -331,6 +336,22 @@ async function setStatus(name, status, actor) {
     }
     if (e.response_mode === 'passthrough' && !e.acknowledge_unfiltered) {
       throw new Error('passthrough has to be acknowledged before it can go live');
+    }
+
+    // An endpoint set to use its OWN credential, with no credential saved.
+    // Caught here rather than at boot because the useful moment to say so is
+    // while the person who configured it is still looking at the screen — at
+    // boot it is a log line, and the endpoint simply would not be served.
+    const cred = (
+      await db
+        .query(`SELECT broken FROM gateway.endpoint_credentials WHERE endpoint = $1`, [name])
+        .catch(() => null)
+    )?.rows?.[0];
+    if (cred && cred.broken) {
+      throw new Error(
+        'this endpoint is set to use its own key, but no key has been saved for it. ' +
+          'Save the key in step 1, or switch it back to the supplier credential.'
+      );
     }
   }
 

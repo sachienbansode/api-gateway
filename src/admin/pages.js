@@ -344,7 +344,9 @@ ${tablePanel(
 )}
 ${tablePanel(
   'Upstreams',
-  'Never visible to a vendor. Credentials resolve from the environment at boot and are not shown here.',
+  'Never visible to a vendor. A credential comes either from the environment file or from the ' +
+    'database sealed with AES-256-GCM, and neither is shown here — the API Studio is where a ' +
+    'credential is set, replaced or read, and every one of those is written to the access log.',
   '<th>Name</th><th>Base URL</th><th>Auth</th><th class="num">Timeout</th>',
   upstreams || EMPTY(4, 'None configured.')
 )}
