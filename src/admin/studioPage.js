@@ -1,6 +1,6 @@
 'use strict';
 
-const { esc, layout } = require('./ui');
+const { esc, layout, pageHead } = require('./ui');
 
 /**
  * The API Studio — onboarding a supplier API and publishing our wrapper over
@@ -380,4 +380,26 @@ function render({ admin, bootstrap, flash }) {
   return layout({ title: 'API Studio', admin, current: '/admin/studio', body, flash });
 }
 
-module.exports = { render };
+/**
+ * Shown instead of the Studio when the database cannot serve it.
+ *
+ * A 503 with the reason named, because "An unexpected error occurred" sends an
+ * operator to the logs when the answer is one sentence long.
+ */
+function unavailable({ admin, problem }) {
+  const body = `
+${pageHead('API Studio', 'The Studio cannot start until the database is in step with the application.')}
+<section class="panel">
+  <div class="ph"><h3>${esc(problem.title)}</h3></div>
+  <div class="pd">
+    <p style="margin-top:0">${esc(problem.detail)}</p>
+    <pre style="margin-top:12px">${esc(problem.raw || '')}</pre>
+    <p class="hint" style="margin-bottom:0">Migrations live in <code>db/migrations/</code> in the
+      repository and are applied with pgAdmin against the <code>gateway</code> database. Every one
+      of them is safe to run twice.</p>
+  </div>
+</section>`;
+  return layout({ title: 'API Studio', admin, current: '/admin/studio', body, flash: null });
+}
+
+module.exports = { render, unavailable };

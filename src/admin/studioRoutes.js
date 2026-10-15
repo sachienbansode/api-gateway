@@ -32,6 +32,62 @@ function script() {
   };
 }
 
+/**
+ * Turn a database error into something a person can act on.
+ *
+ * The Studio reads tables that arrive in migrations 003, 004 and 005. If one
+ * has not been applied, the query fails with a Postgres error code and the
+ * generic handler renders "An unexpected error occurred" — which tells the
+ * operator nothing and costs an hour. Name the missing thing instead.
+ */
+const MIGRATION_FOR = {
+  applications: '003_studio.sql',
+  api_types: '003_studio.sql',
+  api_categories: '003_studio.sql',
+  endpoint_params: '003_studio.sql',
+  endpoint_fields: '003_studio.sql',
+  connection_tests: '003_studio.sql',
+  upstream_secrets: '004_upstream_secrets.sql',
+  secret_audit: '004_upstream_secrets.sql',
+  upstream_credentials: '004_upstream_secrets.sql',
+  payload_check: '005_no_payloads.sql',
+};
+
+function explainDbError(err) {
+  // 42P01 undefined_table, 42703 undefined_column
+  if (err && (err.code === '42P01' || err.code === '42703')) {
+    const text = `${err.message || ''} ${err.detail || ''}`;
+    for (const [object, file] of Object.entries(MIGRATION_FOR)) {
+      if (text.includes(object)) {
+        return {
+          title: `The database is missing ${object}`,
+          detail:
+            `This comes from db/migrations/${file}, which has not been applied to ` +
+            `this database. Run it in pgAdmin against the gateway database — the ` +
+            `whole file, not a selection — then reload this page. It is safe to ` +
+            `re-run if you are unsure.`,
+          raw: err.message,
+        };
+      }
+    }
+    return {
+      title: 'The database schema is behind the application',
+      detail:
+        'A table or column this page needs does not exist. Apply any unrun files ' +
+        'in db/migrations/ in numerical order, then reload.',
+      raw: err.message,
+    };
+  }
+  if (err && err.code === '42501') {
+    return {
+      title: 'The database login is not permitted to read this',
+      detail: `GRANT SELECT on the gateway schema to the application role.`,
+      raw: err.message,
+    };
+  }
+  return null;
+}
+
 /** The page itself, with everything the dropdowns need already in it. */
 function page(logger, { flashOf }) {
   return async (req, res, next) => {
@@ -56,13 +112,27 @@ function page(logger, { flashOf }) {
         })
       );
     } catch (err) {
-      next(err);
+      const explained = explainDbError(err);
+      if (!explained) return next(err);
+      // Logged in full; shown to the admin in words they can act on.
+      logger?.error?.({ err: err.message, code: err.code }, 'studio: schema problem');
+      return res.status(503).type('html').send(
+        studioPage.unavailable({ admin: req.admin, problem: explained })
+      );
     }
   };
 }
 
 function json(logger, deps = {}) {
   const r = express.Router();
+
+  // Every handler below funnels its errors through here, so a missing
+  // migration reads the same whether you hit the page or the API.
+  const fail = (res, next) => (err) => {
+    const explained = explainDbError(err);
+    if (!explained) return next(err);
+    res.status(503).json({ error: `${explained.title}. ${explained.detail}` });
+  };
 
   // --- reads ---------------------------------------------------------------
   r.get('/bootstrap', async (req, res, next) => {
@@ -73,7 +143,7 @@ function json(logger, deps = {}) {
         studio.upstreams(app), studio.endpoints(app),
       ]);
       res.json({ applications, types, categories, upstreams, endpoints });
-    } catch (err) { next(err); }
+    } catch (err) { fail(res, next)(err); }
   });
 
   r.get('/endpoint/:name', async (req, res, next) => {
@@ -81,20 +151,20 @@ function json(logger, deps = {}) {
       const e = await studio.endpoint(String(req.params.name));
       if (!e) return res.status(404).json({ error: 'no endpoint by that name' });
       res.json({ endpoint: e });
-    } catch (err) { next(err); }
+    } catch (err) { fail(res, next)(err); }
   });
 
   // --- step 1 --------------------------------------------------------------
   r.post('/application', async (req, res, next) => {
     try {
       res.json({ application: await studio.saveApplication(req.body, req.admin.email) });
-    } catch (err) { next(err); }
+    } catch (err) { fail(res, next)(err); }
   });
 
   r.post('/category', async (req, res, next) => {
     try {
       res.json({ category: await studio.saveCategory(req.body) });
-    } catch (err) { next(err); }
+    } catch (err) { fail(res, next)(err); }
   });
 
   r.post('/upstream', async (req, res, next) => {
@@ -185,7 +255,7 @@ function json(logger, deps = {}) {
               : `${envRef.varName} is NOT set on this server — add it to /etc/api-gateway/env and restart.`
             : '',
       });
-    } catch (err) { next(err); }
+    } catch (err) { fail(res, next)(err); }
   });
 
   r.get('/credentials', async (req, res, next) => {
@@ -195,7 +265,7 @@ function json(logger, deps = {}) {
         credentials: await secrets.status(req.query.upstream || null),
         recent: await secrets.recentAudit(10),
       });
-    } catch (err) { next(err); }
+    } catch (err) { fail(res, next)(err); }
   });
 
   r.post('/upstream/:name/credential/clear', async (req, res) => {
@@ -256,7 +326,7 @@ function json(logger, deps = {}) {
       );
       // The sample body goes back to the admin's own browser and no further.
       res.json({ result, fields });
-    } catch (err) { next(err); }
+    } catch (err) { fail(res, next)(err); }
   });
 
   // --- steps 2 and 3 -------------------------------------------------------
@@ -290,7 +360,7 @@ function json(logger, deps = {}) {
       const summary = (await studio.endpoints(saved.application))
         .find((e) => e.name === saved.name) || saved;
       res.json({ endpoint: await studio.endpoint(saved.name), summary });
-    } catch (err) { next(err); }
+    } catch (err) { fail(res, next)(err); }
   });
 
   r.post('/endpoint/:name/status', async (req, res, next) => {
@@ -373,7 +443,7 @@ function json(logger, deps = {}) {
       }).catch(() => {});
 
       res.json({ result, projection, upstreamFields, exposedFields });
-    } catch (err) { next(err); }
+    } catch (err) { fail(res, next)(err); }
   });
 
   return r;
