@@ -148,8 +148,15 @@ async function callUpstream({ baseUrl, path, query = {}, method = 'GET', body = 
   }
 
   const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(), Math.min(Number(timeoutMs) || 15000, 60000));
+  const limit = Math.min(Number(timeoutMs) || 15000, 60000);
+  const timer = setTimeout(() => ctl.abort(), limit);
   const started = Date.now();
+
+  // "No answer within 15000ms" covers two different faults with one sentence:
+  // a supplier that never replied, and a supplier that replied promptly with a
+  // body too large to finish arriving. They have different causes and
+  // different fixes, so the progress is tracked and reported.
+  const progress = { headersAt: null, bytes: 0 };
   try {
     const res = await fetch(url, {
       method,
@@ -163,8 +170,9 @@ async function callUpstream({ baseUrl, path, query = {}, method = 'GET', body = 
       },
       body: body ? JSON.stringify(body) : undefined,
     });
+    progress.headersAt = Date.now() - started;
     const ms = Date.now() - started;
-    const { text, truncated, bytes } = await readCapped(res);
+    const { text, truncated, bytes } = await readCapped(res, progress);
     let parsed = null;
     let parseError = null;
     const ctype = res.headers.get('content-type') || '';
@@ -202,12 +210,26 @@ async function callUpstream({ baseUrl, path, query = {}, method = 'GET', body = 
   } catch (err) {
     const ms = Date.now() - started;
     const aborted = err.name === 'AbortError';
+    // Timed out AFTER the headers arrived: the supplier is answering, the body
+    // is simply bigger than it can deliver in the time allowed. Saying "no
+    // answer" here points at the wrong thing — the supplier is up.
+    const midBody = aborted && progress.headersAt !== null;
     return {
       ok: false,
       ms,
       url: url.toString(),
-      error: aborted
-        ? `no answer within ${timeoutMs}ms`
+      bytes: progress.bytes,
+      timedOutMidBody: midBody,
+      error: midBody
+        ? `the supplier started answering in ${progress.headersAt} ms, but only ` +
+          `${mb(progress.bytes)} had arrived when the ${limit} ms timeout fired. The supplier ` +
+          'is up — this response is too large to finish in that time. A VENDOR CALLING THIS ' +
+          'ENDPOINT WOULD FAIL THE SAME WAY, because the gateway uses the same timeout. ' +
+          'Raise the timeout on the supplier API in the Studio (step 1), or narrow what this ' +
+          'endpoint asks for.'
+        : aborted
+        ? `no answer within ${limit} ms — the supplier did not send any response at all. ` +
+          'Check the base URL and that this server can reach it.'
         : `could not reach the supplier: ${err.message}`,
     };
   } finally {
@@ -222,10 +244,11 @@ async function callUpstream({ baseUrl, path, query = {}, method = 'GET', body = 
  * difference between "this is the whole body" and "this is the first N bytes
  * of it" will parse the fragment and misattribute the failure.
  */
-async function readCapped(res) {
+async function readCapped(res, progress = null) {
   const reader = res.body?.getReader?.();
   if (!reader) {
     const text = await res.text();
+    if (progress) progress.bytes = Buffer.byteLength(text);
     return { text, truncated: false, bytes: Buffer.byteLength(text) };
   }
   const chunks = [];
@@ -235,6 +258,7 @@ async function readCapped(res) {
     const { done, value } = await reader.read();
     if (done) break;
     total += value.length;
+    if (progress) progress.bytes = total;
     if (total > MAX_BODY_BYTES) {
       truncated = true;
       try { await reader.cancel(); } catch { /* already finished */ }

@@ -95,3 +95,44 @@ test('supplier responses larger than the preview limit', async (t) => {
     assert.ok(r.raw && r.raw.includes('<html'), 'the first part of the body helps diagnose it');
   });
 });
+
+test('a timeout says WHICH timeout it was', async (t) => {
+  // "No answer within 15000ms" covered two different faults with one sentence.
+  // A supplier that never replied and a supplier whose body is too big to
+  // finish arriving have different causes and different fixes, and the second
+  // one additionally means live vendor calls are failing right now.
+  await t.test('nothing at all: reported as no answer', async () => {
+    const srv = http.createServer(() => { /* never responds */ });
+    await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+    try {
+      const r = await tester.callUpstream({
+        baseUrl: `http://127.0.0.1:${srv.address().port}`,
+        path: '/x', timeoutMs: 300, upstream: { auth_type: 'none' },
+      });
+      assert.strictEqual(r.ok, false);
+      assert.strictEqual(r.timedOutMidBody, false);
+      assert.match(r.error, /did not send any response/i);
+    } finally { srv.close(); }
+  });
+
+  await t.test('answered, then stalled mid-body: reported as too large, and as a live fault', async () => {
+    const srv = http.createServer((req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.write('[{"a":1}');          // headers and a first chunk, then nothing
+    });
+    await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+    try {
+      const r = await tester.callUpstream({
+        baseUrl: `http://127.0.0.1:${srv.address().port}`,
+        path: '/x', timeoutMs: 400, upstream: { auth_type: 'none' },
+      });
+      assert.strictEqual(r.ok, false);
+      assert.strictEqual(r.timedOutMidBody, true);
+      assert.match(r.error, /started answering/i);
+      assert.match(r.error, /supplier is up/i);
+      // The part that turns a test result into an incident.
+      assert.match(r.error, /VENDOR CALLING THIS ENDPOINT WOULD FAIL/);
+      assert.doesNotMatch(r.error, /no answer/i);
+    } finally { srv.close(); }
+  });
+});

@@ -231,6 +231,9 @@ pre{margin:0;white-space:pre-wrap;word-break:break-word;font-family:var(--mono);
 `;
 
 const ICON = {
+  how:
+    '<circle cx="12" cy="12" r="9"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"/>'
+    + '<path d="M12 17h.01"/>',
   overview:
     '<path d="M3 3h7v7H3zM14 3h7v4h-7zM14 11h7v10h-7zM3 14h7v7H3z"/>',
   vendors:
@@ -258,6 +261,7 @@ const TABS = [
   ['/admin/activity', 'Activity', 'activity', 'LOGS'],
   ['/admin/health', 'Health', 'health', ''],
   ['/admin/settings', 'Admin config', 'settings', 'CFG'],
+  ['/admin/how', 'How it works', 'how', ''],
 ];
 
 function svg(name) {

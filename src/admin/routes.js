@@ -647,6 +647,21 @@ function buildAdminRouter(logger, deps = {}) {
 
   const mailRepo = require('../db/repos/mailSettings');
 
+  /**
+   * How it works. Static, but rendered rather than a file, because it reads
+   * the public base URL so the diagram names THIS deployment's host rather
+   * than an example someone has to translate.
+   */
+  router.get('/how', async (req, res, next) => {
+    try {
+      const howPage = require('./howPage');
+      const baseUrl = await settingsRepo.baseUrl().catch(() => '');
+      res.type('html').send(
+        howPage.render({ admin: req.admin, flash: flashOf(req), baseUrl })
+      );
+    } catch (err) { next(err); }
+  });
+
   router.get('/settings', async (req, res, next) => {
     try {
       const [settings, history, mail] = await Promise.all([
