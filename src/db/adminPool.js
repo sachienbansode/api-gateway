@@ -12,10 +12,17 @@ const pgConfig = require('./pgConfig');
  * can never name "admin-staging-api".users. OFS hit exactly this and solved it
  * the same way — two pools, two adapters, no cross-database SQL (REUSE.md §1.1).
  *
- * This pool is READ-ONLY by intent. The gateway reads identity and grants from
- * the platform; it never writes a user, a role or a grant. Nothing here issues
- * an UPDATE or INSERT, and the credential you configure should not have the
- * privilege to either.
+ * This pool never writes IDENTITY. The gateway reads users, roles and grants
+ * and changes none of them, so a gateway compromise cannot become a way to
+ * grant yourself access to the platform.
+ *
+ * It has exactly one write: an append to "admin-staging-api".email_logs, so
+ * the codes this console emails appear in Admin → Email & OTP Logs beside
+ * every other platform email rather than in a private log nobody checks
+ * (REUSE.md §3, and the OFS app does the same). Appending to a log is a
+ * different act from changing who may do what, and the log is the thing an
+ * auditor reads. If you give this connection a narrowed login, it needs
+ * SELECT on users and roles plus INSERT on email_logs — nothing else.
  *
  * Env block prefix: AUTH_ (see .env.example)
  *

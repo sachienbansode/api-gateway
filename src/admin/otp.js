@@ -135,7 +135,7 @@ async function issue({ user, ip, logger }) {
 
   // Send AFTER the row exists, so a code that reaches someone is always one we
   // can verify. The reverse order loses the race in the way that matters.
-  await send(user, code, logger);
+  await send(user, code, logger, ip);
 
   // Opportunistic tidy-up, and never a reason to fail a sign-in.
   db.query(`SELECT gateway.purge_admin_otp()`).catch(() => {});
@@ -148,22 +148,54 @@ function esc(s) {
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 }
 
-async function send(user, code, logger) {
+async function send(user, code, logger, ip) {
   const nodemailer = require('nodemailer');
-  const { transport, from } = await smtp.transportConfig();
+  const emailLog = require('../db/repos/emailLog');
   const minutes = Math.round(CODE_TTL_MS / 60000);
+  // Two subjects on purpose. The one that goes OUT carries the code, because
+  // it shows in a phone's notification preview and saves opening the mail. The
+  // one that gets LOGGED does not: email_logs is a shared table that any
+  // platform admin can read in Admin → Email & OTP Logs, and a six-digit code
+  // sitting there in plain text for anyone to read is the second factor
+  // handed to whoever has that screen.
+  const subject = `${code} is your sign-in code — Ashika - Pravah`;
+  const loggedSubject = 'Your sign-in code — Ashika - Pravah';
+
+  // Logged into the PLATFORM's email_logs, so this appears in
+  // Admin → Email & OTP Logs beside every other platform email rather than in
+  // a private log nobody thinks to check. REUSE.md §3 makes that the rule;
+  // OFS follows it and so does this.
+  const base = {
+    purpose: 'pravah_login_otp',
+    to_email: user.email,
+    user_id: Number.isFinite(Number(user.id)) ? Number(user.id) : null,
+    subject: loggedSubject,
+    triggered_by: user.email,
+    ip_address: ip || null,
+  };
+
+  let transport;
+  let from;
+  try {
+    ({ transport, from } = await smtp.transportConfig());
+  } catch (err) {
+    await emailLog.log({ ...base, status: 'failed', error_text: err.message });
+    throw err;
+  }
 
   const name = esc(user.first_name || user.email || '');
-  await nodemailer.createTransport(transport).sendMail({
-    from,
-    to: user.email,
-    subject: `${code} is your sign-in code — Pravah API Gateway`,
-    text:
-      `Your sign-in code for the Pravah API Gateway console is ${code}.\n\n` +
-      `It expires in ${minutes} minutes and can be used once.\n\n` +
-      `If you did not try to sign in, tell your administrator — somebody has your password.`,
-    html: `<div style="font-family:system-ui,-apple-system,'Segoe UI',sans-serif;max-width:480px;color:#1a1816">
-  <p style="font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#9e9b94;margin:0">Pravah · API Gateway</p>
+  let info;
+  try {
+    info = await nodemailer.createTransport(transport).sendMail({
+      from,
+      to: user.email,
+      subject,
+      text:
+        `Your sign-in code for the Ashika - Pravah console is ${code}.\n\n` +
+        `It expires in ${minutes} minutes and can be used once.\n\n` +
+        `If you did not try to sign in, tell your administrator — somebody has your password.`,
+      html: `<div style="font-family:system-ui,-apple-system,'Segoe UI',sans-serif;max-width:480px;color:#1a1816">
+  <p style="font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#9e9b94;margin:0">Ashika &middot; Pravah</p>
   <h2 style="margin:6px 0 14px;font-size:19px;font-weight:600">Your sign-in code</h2>
   <p style="margin:0 0 6px">Hello ${name},</p>
   <div style="font-size:30px;font-weight:700;letter-spacing:9px;padding:18px 0;margin:16px 0;
@@ -173,9 +205,16 @@ async function send(user, code, logger) {
   <p style="margin:14px 0 0;color:#c0392b;font-size:12px">If you did not try to sign in, tell your
     administrator — it means somebody else has your password.</p>
 </div>`,
-  });
+    });
+  } catch (err) {
+    await emailLog.log({ ...base, status: 'failed', error_text: err.message });
+    throw err;
+  }
 
-  // The code is never logged. Not at debug, not in development.
+  await emailLog.fromInfo(base, info);
+
+  // The code is never logged. Not at debug, not in development, and not in
+  // the shared email log — see loggedSubject above.
   logger?.info({ email: user.email }, 'admin sign-in: second-factor code sent');
 }
 

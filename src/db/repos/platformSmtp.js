@@ -8,7 +8,7 @@ const adminDb = require('../adminPool');
  *
  * TWO sources, and the first one is the one to use.
  *
- * 1. GW_SMTP_* in this server's own env file. Its own mailbox credential,
+ * 1. SMTP_* in this server's own env file. Its own mailbox credential,
  *    readable only by this application.
  *
  * 2. The platform's smtp_settings row, read (never written). Appealing at
@@ -36,19 +36,37 @@ const adminDb = require('../adminPool');
 const CACHE_MS = Number(process.env.SMTP_CACHE_MS || 60000);
 let cached = null; // { at, row }
 
-/** This server's own mail credential, if it has one. */
+/**
+ * This server's own mail credential, if it has one.
+ *
+ * Variable names match the OFS app's lib/mailer.js exactly — SMTP_HOST,
+ * SMTP_USER, SMTP_PASS and the rest — because an operator configuring mail on
+ * a third box should not have to learn a third set of names. OFS reached this
+ * same escape hatch for the same reason, and its comment says so: reading the
+ * platform row needs API_KEY_SECRET to be byte-identical on a different host,
+ * and MFA sitting behind that dependency locks everyone out when it is not.
+ */
 function localConfig() {
-  const host = process.env.GW_SMTP_HOST;
+  const host = String(process.env.SMTP_HOST || '').trim();
   if (!host) return null;
-  const from = process.env.GW_SMTP_FROM || '';
+  const user = String(process.env.SMTP_USER || '').trim();
+  const port = Number(process.env.SMTP_PORT) || 587;
   return {
     host,
-    port: Number(process.env.GW_SMTP_PORT) || 587,
-    secure: String(process.env.GW_SMTP_SECURE || 'false').toLowerCase() === 'true',
-    user: process.env.GW_SMTP_USER || '',
-    pass: process.env.GW_SMTP_PASSWORD || '',
-    from: from || process.env.GW_SMTP_USER || '',
-    fromName: process.env.GW_SMTP_FROM_NAME || 'Pravah API Gateway',
+    port,
+    // 465 is implicit TLS; 587 is STARTTLS, which nodemailer does with
+    // secure:false. Defaulting from the port is what OFS does and it is right:
+    // the common mistake is setting 465 and leaving secure false, which hangs
+    // until the timeout rather than failing with anything readable.
+    secure: process.env.SMTP_SECURE != null
+      ? /^(1|true|yes)$/i.test(String(process.env.SMTP_SECURE).trim())
+      : port === 465,
+    user,
+    // Plain text here on purpose: sealing it would need the very secret this
+    // path exists to do without. Keep the env file 0600.
+    pass: String(process.env.SMTP_PASS || ''),
+    from: String(process.env.SMTP_FROM || user).trim(),
+    fromName: String(process.env.SMTP_FROM_NAME || '').trim() || 'Ashika - Pravah',
   };
 }
 
@@ -106,15 +124,16 @@ function invalidate() {
 async function ready() {
   const local = localConfig();
   if (local) {
-    if (!local.from) return { ok: false, reason: 'GW_SMTP_FROM is not set' };
+    if (!local.from) return { ok: false, reason: 'SMTP_FROM is not set' };
     return { ok: true, host: local.host, from: local.from, source: 'this server' };
   }
   if (!platformAllowed()) {
     return {
       ok: false,
       reason:
-        'no mail is configured for this gateway. Set GW_SMTP_HOST, GW_SMTP_USER, ' +
-        'GW_SMTP_PASSWORD and GW_SMTP_FROM in /etc/api-gateway/env. (Borrowing the ' +
+        'no mail is configured for this gateway. Set SMTP_HOST, SMTP_USER, ' +
+        'SMTP_PASS and SMTP_FROM in /etc/api-gateway/env — the same names the ' +
+        'OFS app uses. (Borrowing the ' +
         "platform's mail credential instead needs SMTP_FROM_PLATFORM=true and puts " +
         "the platform's API_KEY_SECRET on this server — read why that is a bad trade " +
         'in src/db/repos/platformSmtp.js before doing it.)',
