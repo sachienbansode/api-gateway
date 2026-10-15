@@ -271,20 +271,35 @@ function json(logger, deps = {}) {
   /**
    * Read a stored credential back.
    *
-   * Full-access admins only — the same people who could change it, rotate it,
-   * or point the upstream somewhere they control. Restricting the READ while
-   * leaving the WRITE open would be theatre.
+   * Open to every signed-in admin by default. The reasoning: everyone who
+   * reaches this console has already been authenticated against the platform
+   * directory and is named in the log, and a token people cannot look up is a
+   * token that ends up in a spreadsheet where nobody can see who has it.
+   *
+   * Tighten it without a code change by setting CREDENTIAL_REVEAL in
+   * /etc/api-gateway/env:
+   *
+   *   any   (default)  any signed-in admin
+   *   edit             admins who can change things
+   *   full             admins with full access only
    *
    * POST, not GET: a GET would end up in browser history, in a proxy log, and
    * in anything that prefetches links.
    */
+  function mayReveal(admin) {
+    const mode = String(process.env.CREDENTIAL_REVEAL || 'any').toLowerCase();
+    if (mode === 'full') {
+      return admin.canEdit && (admin.source === 'env' || (admin.pages || []).includes('*'));
+    }
+    if (mode === 'edit') return admin.canEdit === true;
+    return true; // 'any' — being signed in is the bar
+  }
+
   r.post('/upstream/:name/credential/reveal', async (req, res) => {
-    const fullAccess =
-      req.admin.canEdit &&
-      (req.admin.source === 'env' || (req.admin.pages || []).includes('*'));
-    if (!fullAccess) {
+    if (!mayReveal(req.admin)) {
       return res.status(403).json({
-        error: 'Reading a stored credential needs full administrator access.',
+        error: 'Reading a stored credential is restricted on this server ' +
+          `(CREDENTIAL_REVEAL=${process.env.CREDENTIAL_REVEAL}).`,
       });
     }
     try {
@@ -295,11 +310,11 @@ function json(logger, deps = {}) {
         actor: req.admin.email,
         reason,
       });
+      // warn, not info: this is the line someone greps for after an incident.
       logger?.warn?.(
-        { upstream: req.params.name, actor: req.admin.email, reason },
+        { upstream: req.params.name, actor: req.admin.email, role: req.admin.role, reason },
         'studio: supplier credential revealed'
       );
-      // no-store, so it is not written to a disk cache on the way past.
       res.set('Cache-Control', 'no-store');
       res.json({ value });
     } catch (err) {
