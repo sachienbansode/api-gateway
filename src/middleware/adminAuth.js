@@ -56,8 +56,8 @@ function invalidate(userId) {
 // Grants
 // ---------------------------------------------------------------------------
 
-/** permissions.pages arrives as JSONB or as text depending on the driver. */
-function pagesOf(permissions) {
+/** permissions arrives as JSONB or as text depending on the driver. */
+function permsOf(permissions) {
   let p = permissions;
   if (typeof p === 'string') {
     try {
@@ -66,8 +66,18 @@ function pagesOf(permissions) {
       p = null;
     }
   }
-  const pages = p && p.pages;
+  return p && typeof p === 'object' ? p : {};
+}
+
+function pagesOf(permissions) {
+  const pages = permsOf(permissions).pages;
   return Array.isArray(pages) ? pages.map(String) : [];
+}
+
+/** permissions.access — the platform's per-page level map, when present. */
+function accessOf(permissions) {
+  const a = permsOf(permissions).access;
+  return a && typeof a === 'object' ? a : {};
 }
 
 /** Does this role reach the gateway's admin surface at all? */
@@ -78,16 +88,36 @@ function hasGatewayGrant(pages) {
 /**
  * May this role CHANGE things, as opposed to look at them?
  *
- * Read is the default and write must be granted explicitly. A bare
- * 'api-gateway' entry is view-only: the surface that decides which fields a
- * vendor sees is not something to hand out by accident.
+ * TWO conventions have to be understood here, and getting this wrong is not a
+ * subtle bug — it silently makes every grant read-only.
+ *
+ *   1. This gateway's own:   pages: ["api-gateway:edit"]
+ *      A suffix on the page entry. Explicit, and the safer default when a
+ *      grant is written by hand or by SQL.
+ *
+ *   2. The platform's:       pages: ["api-gateway"], access: {"api-gateway":"view"}
+ *      The level lives in a separate map, and ANYTHING other than 'view' —
+ *      including the key being absent — means full access. That is the
+ *      platform's rule (middleware/pageAccess.js in the Ananta app), not a
+ *      choice available to us: its Roles screen writes grants that way, and
+ *      that screen is where these grants are actually made.
+ *
+ * So a plain 'api-gateway' entry means EDIT unless access says 'view'. The
+ * earlier reading — plain entry is view-only — was defensible in isolation and
+ * wrong in context: it would have made every role ticked in the platform's own
+ * UI read-only, with nothing on either screen explaining why.
  */
-function canEdit(pages) {
-  return pages.some((e) => {
+function canEdit(pages, access = {}) {
+  for (const e of pages) {
     if (e === '*') return true;
     const [key, level] = e.split(':');
-    return key === PAGE_KEY && level === 'edit';
-  });
+    if (key !== PAGE_KEY) continue;
+    if (level === 'edit') return true;
+    if (level === 'view') continue;          // explicitly view-only
+    // No suffix: the platform's access map decides, and its default is edit.
+    if (access[PAGE_KEY] !== 'view') return true;
+  }
+  return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -109,13 +139,14 @@ async function loadUser(id) {
   if (!row) return null;
 
   const pages = pagesOf(row.permissions);
+  const access = accessOf(row.permissions);
   const user = {
     id: row.id,
     email: row.email,
     roleId: row.roleId,
     role: row.role,
     pages,
-    canEdit: canEdit(pages),
+    canEdit: canEdit(pages, access),
     source: 'platform',
   };
 
@@ -286,6 +317,19 @@ function makeAdminAuth(logger) {
         return next(errors.unauthorized('Invalid or expired token.'));
       }
 
+      // A half-finished sign-in is NOT a sign-in.
+      //
+      // The ticket issued between the password and the second factor is signed
+      // with this same secret, because it has to survive a round trip through
+      // a browser we do not control. Without this check it would therefore be
+      // a perfectly valid session token, and the second factor would be a
+      // screen anyone could skip by not submitting it. See src/admin/otp.js.
+      if (claims.gw_otp === true) {
+        return next(
+          errors.unauthorized('Your sign-in is not finished — enter the code we emailed you.')
+        );
+      }
+
       // A break-glass session. Recognised here so it never touches the
       // platform directory — that account does not exist there, and the whole
       // point of break-glass is that it works when the directory is down.
@@ -338,11 +382,14 @@ function makeAdminAuth(logger) {
       }
     }
 
-    // 3. Write operations need an explicit edit grant.
+    // 3. Write operations need an edit grant.
     const mutating = !['GET', 'HEAD', 'OPTIONS'].includes(req.method);
     if (mutating && !user.canEdit) {
       return next(
-        errors.forbidden(`Read-only access. Changing the gateway needs "${PAGE_KEY}:edit".`)
+        errors.forbidden(
+          `Your role has read-only access to "${PAGE_KEY}". Changing the gateway needs ` +
+            'edit access, which a SuperAdmin sets on the role in the platform.'
+        )
       );
     }
 
@@ -368,6 +415,7 @@ module.exports = {
   superadminEnabled,
   invalidate,
   pagesOf,
+  accessOf,
   hasGatewayGrant,
   canEdit,
   PAGE_KEY,

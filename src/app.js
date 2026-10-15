@@ -272,6 +272,41 @@ function createApp({ logger, config } = {}) {
       }
     }
 
+    // A role that demands a second factor, on a server that cannot send one,
+    // is a locked door with no key — and it is discovered at the worst moment,
+    // by the person trying to sign in. Say so at boot instead.
+    if (adminDb.isEnabled()) {
+      try {
+        const smtp = require('./db/repos/platformSmtp');
+        const { rows } = await adminDb.query(
+          `SELECT name FROM ${adminDb.T('roles')}
+            WHERE COALESCE(requires_mfa, false) = true
+              AND (permissions->'pages' @> '"*"'::jsonb
+                OR permissions->'pages' @> to_jsonb($1::text)
+                OR permissions->'pages' @> to_jsonb(($1 || ':edit')::text))`,
+          [process.env.GATEWAY_PAGE_KEY || 'api-gateway']
+        );
+        if (rows.length) {
+          const state = await smtp.ready();
+          if (!state.ok) {
+            logger.error(
+              { roles: rows.map((r) => r.name), reason: state.reason },
+              'these roles reach this console AND require a second factor, but a code ' +
+                'cannot be emailed — nobody holding them can sign in. Fix the platform ' +
+                'SMTP settings, or set API_KEY_SECRET on this server.'
+            );
+          } else {
+            logger.info(
+              { roles: rows.map((r) => r.name), via: state.host },
+              'second factor is required for these roles and mail is working'
+            );
+          }
+        }
+      } catch (err) {
+        logger.warn({ err: err.message }, 'could not check the second-factor configuration');
+      }
+    }
+
     await vendorStore.start();
     audit.start();
   }

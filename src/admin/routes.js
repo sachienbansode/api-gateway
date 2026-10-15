@@ -7,8 +7,12 @@ const adminDb = require('../db/adminPool');
 const session = require('./session');
 const attempts = require('./loginAttempts');
 const loginPage = require('./loginPage');
+const otpPage = require('./otpPage');
+const otp = require('./otp');
 const pages = require('./pages');
-const { makeAdminAuth } = require('../middleware/adminAuth');
+const {
+  makeAdminAuth, pagesOf, hasGatewayGrant, PAGE_KEY,
+} = require('../middleware/adminAuth');
 const db = require('../db/pool');
 const vendorRepo = require('../db/repos/vendors');
 const auditRepo = require('../db/repos/audit');
@@ -53,9 +57,11 @@ async function findPlatformUser(email, logger) {
   if (platformLoginUsable === false) return null;
   try {
     const row = await adminDb.one(
-      `SELECT u.id, u.email, u.password_hash, u.role_id AS "roleId",
+      `SELECT u.id, u.email, u.first_name, u.password_hash, u.role_id AS "roleId",
               COALESCE(u.is_active, true) AS is_active,
-              r.name AS role, r.permissions
+              COALESCE(u.mfa_enabled, false) AS mfa_enabled,
+              r.name AS role, r.permissions,
+              COALESCE(r.requires_mfa, false) AS requires_mfa
          FROM ${adminDb.T('users')} u
          LEFT JOIN ${adminDb.T('roles')} r ON r.id = u.role_id
         WHERE lower(u.email) = lower($1)`,
@@ -187,7 +193,69 @@ function buildAdminRouter(logger, deps = {}) {
       if (!user.password_hash) return fail('account has no local password (SSO only)');
       if (!passwordOk) return fail('bad password');
 
+      // The grant is checked HERE as well as on every request.
+      //
+      // Not for security — adminAuth enforces it on each request and is the
+      // real control. For honesty: without this, an Ananta user with a correct
+      // password signs in, is bounced by adminAuth, and lands back on the login
+      // page with no explanation. They retype the password, it happens again,
+      // and they open a ticket saying the portal is broken. The password was
+      // never the problem.
+      //
+      // Saying "your role does not have access" is safe at this point and only
+      // at this point: they have already proved the password, so it tells them
+      // nothing they could not have learnt by signing in.
+      const pages = pagesOf(user.permissions);
+      if (!hasGatewayGrant(pages)) {
+        attempts.recordSuccess(keys); // the password was right; do not lock them out
+        logger?.warn(
+          { ip, email, role: user.role, pages, requestId: req.id },
+          'admin sign-in refused: correct password, but the role does not grant ' +
+            `"${PAGE_KEY}". Grant it on the role in the platform's Roles screen.`
+        );
+        return res.status(403).type('html').send(
+          loginPage.render({
+            title,
+            email,
+            error:
+              'Your account is valid, but your role does not have access to this portal. ' +
+              'Ask a SuperAdmin to grant your role the API Gateway page.',
+          })
+        );
+      }
+
       attempts.recordSuccess(keys);
+
+      // --- Second factor, when the platform says so --------------------------
+      //
+      // requires_mfa on the role, or mfa_enabled on the person. The flag is
+      // the platform's; honouring it here is what stops this console from
+      // being the weakest way in to the same account.
+      if (otp.required(user)) {
+        try {
+          await otp.issue({ user, ip, logger });
+        } catch (err) {
+          // No pending cookie on failure: a code screen with no code behind it
+          // is a dead end that looks like the person's fault.
+          logger?.error(
+            { err: err.message, email, requestId: req.id },
+            'admin sign-in: could not send the second-factor code'
+          );
+          return res.status(503).type('html').send(
+            loginPage.render({
+              title, email,
+              error:
+                'Your role needs a second factor, but the code could not be emailed. ' +
+                'Tell your administrator — the platform mail settings need attention.',
+            })
+          );
+        }
+        otp.setPendingCookie(res, req, otp.mintPending(user), session.isSecure(req));
+        logger?.info({ ip, email, role: user.role, requestId: req.id },
+          'admin sign-in: password accepted, awaiting second factor');
+        return res.redirect(303, '/admin/login/otp');
+      }
+
       logger?.info({ ip, email, role: user.role, requestId: req.id }, 'admin signed in');
       session.setCookie(res, req, session.mint({ id: user.id, email: user.email }));
       return res.redirect(303, '/admin');
@@ -203,6 +271,86 @@ function buildAdminRouter(logger, deps = {}) {
             error: 'Sign-in is temporarily unavailable. Try again shortly.',
           })
         );
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // GET / POST /admin/login/otp — the second factor
+  //
+  // Both are OUTSIDE the session gate below, because the person holding a
+  // pending ticket is by definition not signed in yet. The ticket is the only
+  // thing that identifies them here, and adminAuth refuses it as a session.
+  // -------------------------------------------------------------------------
+  router.get('/login/otp', (req, res) => {
+    const pending = otp.readPending(req);
+    if (!pending) return res.redirect(303, '/admin/login');
+    res.type('html').send(
+      otpPage.render({ title, email: pending.email, minutes: Math.round(otp.CODE_TTL_MS / 60000) })
+    );
+  });
+
+  router.post('/login/otp', async (req, res) => {
+    const pending = otp.readPending(req);
+    const ip = clientIp(req);
+    if (!pending) {
+      // Expired, tampered with, or someone came straight here. All three mean
+      // the same thing: start again.
+      return res.redirect(303, '/admin/login');
+    }
+
+    // Rate limited on the same counters as the password step, so a code cannot
+    // be ground down from a thousand connections while the password door is
+    // the only one being watched.
+    const keys = [`ip:${ip}`, `otp:${String(pending.id)}`];
+    const limit = attempts.check(keys);
+    if (limit.blocked) {
+      res.set('Retry-After', String(limit.retryAfter));
+      return res.status(429).type('html').send(
+        otpPage.render({
+          title, email: pending.email, minutes: Math.round(otp.CODE_TTL_MS / 60000),
+          error: `Too many attempts. Try again in ${Math.ceil(limit.retryAfter / 60)} minute(s).`,
+        })
+      );
+    }
+
+    try {
+      const result = await otp.verify({ userId: pending.id, code: req.body?.code, logger });
+      if (!result.ok) {
+        attempts.recordFailure(keys);
+        logger?.warn(
+          { ip, email: pending.email, reason: result.reason, requestId: req.id },
+          'admin second factor failed'
+        );
+        // A burnt or expired challenge cannot be retried on this screen —
+        // send them back rather than letting them type into a dead form.
+        if (result.reason !== 'wrong code') {
+          otp.clearPendingCookie(res, session.isSecure(req));
+          return res.status(401).type('html').send(
+            loginPage.render({ title, email: pending.email, error: result.message })
+          );
+        }
+        return res.status(401).type('html').send(
+          otpPage.render({
+            title, email: pending.email,
+            minutes: Math.round(otp.CODE_TTL_MS / 60000), error: result.message,
+          })
+        );
+      }
+
+      attempts.recordSuccess(keys);
+      otp.clearPendingCookie(res, session.isSecure(req));
+      logger?.info({ ip, email: pending.email, requestId: req.id },
+        'admin signed in (second factor)');
+      session.setCookie(res, req, session.mint({ id: pending.id, email: pending.email }));
+      return res.redirect(303, '/admin');
+    } catch (err) {
+      logger?.error({ err: err.message, ip, requestId: req.id }, 'admin second factor error');
+      return res.status(503).type('html').send(
+        otpPage.render({
+          title, email: pending.email, minutes: Math.round(otp.CODE_TTL_MS / 60000),
+          error: 'Sign-in is temporarily unavailable. Try again shortly.',
+        })
+      );
     }
   });
 

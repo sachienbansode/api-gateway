@@ -205,11 +205,18 @@ test('an inactive account is refused even with a valid token', async () => {
   assert.strictEqual(err.status, 401);
 });
 
-test('a bare page grant is READ-ONLY: GET passes, POST is 403', async () => {
+// This test asserted the opposite until the platform's own convention was
+// read properly: a bare 'api-gateway' entry was treated as view-only here,
+// while the platform's Roles screen writes exactly that shape for a FULL
+// grant and puts the level in permissions.access. The old rule was safe in
+// isolation and wrong in context — it would have made every role granted
+// through that screen read-only, with nothing on either side explaining it.
+// View-only is now stated, by access:'view' or an explicit ':view' suffix.
+test("a view-level grant is READ-ONLY: GET passes, POST is 403", async () => {
   resetEnv();
   stubPlatform(() => ({
-    id: 2, email: 'viewer@example.com', roleId: 4, role: 'Viewer',
-    permissions: { pages: ['api-gateway'] },
+    id: 2, email: 'viewer@example.com', roleId: 4, role: 'API Viewer',
+    permissions: { pages: ['api-gateway'], access: { 'api-gateway': 'view' } },
   }));
   const { makeAdminAuth } = loadAuth();
   const mw = makeAdminAuth(silent);
@@ -223,7 +230,22 @@ test('a bare page grant is READ-ONLY: GET passes, POST is 403', async () => {
     headers: { authorization: `Bearer ${token({ id: 2 })}` },
   });
   assert.strictEqual(post.err.status, 403);
-  assert.match(post.err.message, /api-gateway:edit/);
+  assert.match(post.err.message, /read-only/i);
+});
+
+test('a bare page grant from the platform Roles screen may write', async () => {
+  resetEnv();
+  stubPlatform(() => ({
+    id: 22, email: 'apiadmin@example.com', roleId: 44, role: 'API Admin',
+    permissions: { pages: ['api-gateway'] },
+  }));
+  const { makeAdminAuth } = loadAuth();
+  const { err, req } = await run(makeAdminAuth(silent), {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token({ id: 22 })}` },
+  });
+  assert.strictEqual(err, undefined);
+  assert.strictEqual(req.admin.canEdit, true);
 });
 
 test('an :edit grant may write', async () => {
@@ -333,4 +355,59 @@ test('a vendor API key is NOT an admin credential', async () => {
     headers: { 'x-api-key': 'vk_acme_whatever' },
   });
   assert.strictEqual(err.status, 401);
+});
+
+// ---------------------------------------------------------------------------
+// The second factor's pending ticket
+// ---------------------------------------------------------------------------
+
+test('a pending second-factor ticket is NOT a session', async () => {
+  resetEnv();
+  // The ticket is signed with the SAME secret as a real session, because it has
+  // to survive a round trip through a browser. The only thing separating the
+  // two is the gw_otp claim and this check. If it ever stops working, a person
+  // who gets as far as the code screen can skip the code entirely by not
+  // submitting it — which is to say, the second factor stops existing.
+  stubPlatform(() => ({
+    id: 5, email: 'mfa@example.com', roleId: 7, role: 'API Admin',
+    permissions: { pages: ['api-gateway'] },
+  }));
+  const { makeAdminAuth } = loadAuth();
+  const { err } = await run(makeAdminAuth(silent), {
+    headers: { authorization: `Bearer ${token({ id: 5, sub: '5', email: 'mfa@example.com', gw_otp: true })}` },
+  });
+  assert.strictEqual(err.status, 401);
+  assert.match(err.message, /not finished/i);
+});
+
+test('the same identity WITHOUT the gw_otp claim is a session', async () => {
+  resetEnv();
+  stubPlatform(() => ({
+    id: 5, email: 'mfa@example.com', roleId: 7, role: 'API Admin',
+    permissions: { pages: ['api-gateway'] },
+  }));
+  const { makeAdminAuth } = loadAuth();
+  const { err, req } = await run(makeAdminAuth(silent), {
+    headers: { authorization: `Bearer ${token({ id: 5, sub: '5', email: 'mfa@example.com' })}` },
+  });
+  assert.strictEqual(err, undefined);
+  assert.strictEqual(req.admin.email, 'mfa@example.com');
+});
+
+test('a forged gw_otp value does not get waved through', async () => {
+  resetEnv();
+  stubPlatform(() => ({
+    id: 5, email: 'mfa@example.com', roleId: 7, role: 'API Admin',
+    permissions: { pages: ['api-gateway'] },
+  }));
+  const { makeAdminAuth } = loadAuth();
+  // Only `true` means pending; anything else must not accidentally pass the
+  // check by being falsy. These are sessions and should be accepted — the test
+  // is that the check is exact, not that it is loose.
+  for (const v of ['true', 1, {}]) {
+    const { err } = await run(makeAdminAuth(silent), {
+      headers: { authorization: `Bearer ${token({ id: 5, sub: '5', email: 'mfa@example.com', gw_otp: v })}` },
+    });
+    assert.strictEqual(err, undefined, `gw_otp: ${JSON.stringify(v)}`);
+  }
 });

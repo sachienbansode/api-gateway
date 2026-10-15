@@ -25,6 +25,7 @@
     "helmet": "^8.0.0",
     "js-yaml": "^4.1.0",
     "jsonwebtoken": "^9.0.3",
+    "nodemailer": "^7.0.5",
     "pg": "^8.23.0",
     "pino": "^9.5.0"
   }
