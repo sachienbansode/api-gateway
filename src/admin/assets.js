@@ -53,4 +53,15 @@ function serve(name) {
 
 const has = (name) => load(name) !== null;
 
-module.exports = { serve, has };
+/**
+ * The raw bytes, for a consumer that cannot make an HTTP request — the only
+ * one today being the sign-in email, which attaches the mark inline rather
+ * than linking to it. Mail clients block remote images by default, so a
+ * linked logo is a broken box in most inboxes on first open.
+ */
+function bytes(name) {
+  const a = load(name);
+  return a ? a.body : null;
+}
+
+module.exports = { serve, has, bytes };

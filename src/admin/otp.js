@@ -5,6 +5,8 @@ const jwt = require('jsonwebtoken');
 
 const db = require('../db/pool');
 const smtp = require('../db/repos/platformSmtp');
+const settings = require('../db/repos/settings');
+const assets = require('./assets');
 
 /**
  * The second factor for console sign-in.
@@ -184,27 +186,114 @@ async function send(user, code, logger, ip) {
   }
 
   const name = esc(user.first_name || user.email || '');
+
+  // The console's own address, from Admin config. A code with no indication of
+  // what it is FOR is the shape of a phishing mail; the link is what lets
+  // somebody check they are signing in to the thing that sent this.
+  let appUrl = '';
+  try {
+    appUrl = await settings.baseUrl();
+  } catch { /* a missing base URL must not stop a sign-in */ }
+  const safeUrl = /^https?:\/\//i.test(appUrl) ? appUrl : '';
+  const consoleUrl = safeUrl ? `${safeUrl}/admin` : '';
+
+  // The mark travels WITH the message as an inline attachment rather than as a
+  // link. Mail clients block remote images by default, so a linked logo is a
+  // broken box on first open — which is exactly the impression a sign-in mail
+  // should not give.
+  const logo = assets.bytes('logo.png');
+  const attachments = logo
+    ? [{ filename: 'ashika.png', content: logo, cid: 'ashikamark', contentDisposition: 'inline' }]
+    : [];
+
+  // Tables, inline styles, and no flexbox. Outlook renders with Word's engine:
+  // a div with max-width is ignored there, which is why the first version of
+  // this mail ran edge to edge with no margin.
+  const html = `<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Your sign-in code</title></head>
+<body style="margin:0;padding:0;background:#f4f3f0;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+       style="background:#f4f3f0;padding:28px 12px;">
+  <tr><td align="center">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+           style="max-width:480px;width:100%;background:#ffffff;border:1px solid #e4e2dc;border-radius:10px;">
+
+      <tr><td style="padding:26px 28px 0 28px;">
+        ${logo ? `<img src="cid:ashikamark" width="44" height="44" alt="Ashika"
+             style="display:block;border:0;outline:none;margin:0 0 14px 0;">` : ''}
+        <div style="font:600 19px/1.3 'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1a1816;
+                    letter-spacing:-.2px;">Ashika - Pravah</div>
+        <div style="font:600 9.5px/1.4 'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#9e9b94;
+                    text-transform:uppercase;letter-spacing:1px;margin-top:3px;">API Gateway</div>
+        <div style="height:2px;width:34px;background:#b8860b;border-radius:2px;margin:15px 0 0 0;
+                    font-size:0;line-height:0;">&nbsp;</div>
+      </td></tr>
+
+      <tr><td style="padding:19px 28px 0 28px;
+                     font:400 13.5px/1.55 'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1a1816;">
+        <p style="margin:0 0 4px 0;font-size:16px;font-weight:600;">Your sign-in code</p>
+        <p style="margin:0;color:#58554e;">Hello ${name}, use this code to finish signing in.</p>
+      </td></tr>
+
+      <tr><td style="padding:18px 28px 0 28px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+               style="background:#f9f8f6;border:1px solid #e4e2dc;border-radius:8px;">
+          <tr><td align="center" style="padding:18px 10px;
+                 font:700 31px/1 'Courier New',Courier,monospace;letter-spacing:9px;color:#1a1816;">
+            ${code}
+          </td></tr>
+        </table>
+        <p style="margin:9px 0 0 0;font:400 12.5px/1.5 'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+                  color:#58554e;">Expires in ${minutes} minutes. It can be used once.</p>
+      </td></tr>
+
+      ${consoleUrl ? `<tr><td style="padding:18px 28px 0 28px;">
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+          <tr><td style="background:#1a1816;border-radius:6px;">
+            <a href="${esc(consoleUrl)}"
+               style="display:inline-block;padding:10px 20px;color:#ffffff;text-decoration:none;
+                      font:500 13px/1 'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">Open the console</a>
+          </td></tr>
+        </table>
+        <p style="margin:9px 0 0 0;font:400 11.5px/1.5 'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+                  color:#9e9b94;">Or go to
+          <a href="${esc(consoleUrl)}" style="color:#1a4fa0;">${esc(consoleUrl)}</a>
+        </p>
+      </td></tr>` : ''}
+
+      <tr><td style="padding:18px 28px 24px 28px;">
+        <div style="border-top:1px solid #e4e2dc;padding-top:14px;
+                    font:400 11.5px/1.55 'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#9e9b94;">
+          <span style="color:#c0392b;">Did not try to sign in?</span> Tell your administrator —
+          it means somebody else has your password. Nobody at Ashika will ever ask you for this code.
+        </div>
+      </td></tr>
+    </table>
+
+    <div style="max-width:480px;margin:13px auto 0;
+                font:400 11px/1.5 'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#9e9b94;
+                text-align:center;">
+      Ashika Group &middot; sent automatically, please do not reply
+    </div>
+  </td></tr>
+</table>
+</body></html>`;
+
   let info;
   try {
     info = await nodemailer.createTransport(transport).sendMail({
       from,
       to: user.email,
       subject,
+      attachments,
       text:
         `Your sign-in code for the Ashika - Pravah console is ${code}.\n\n` +
         `It expires in ${minutes} minutes and can be used once.\n\n` +
-        `If you did not try to sign in, tell your administrator — somebody has your password.`,
-      html: `<div style="font-family:system-ui,-apple-system,'Segoe UI',sans-serif;max-width:480px;color:#1a1816">
-  <p style="font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#9e9b94;margin:0">Ashika &middot; Pravah</p>
-  <h2 style="margin:6px 0 14px;font-size:19px;font-weight:600">Your sign-in code</h2>
-  <p style="margin:0 0 6px">Hello ${name},</p>
-  <div style="font-size:30px;font-weight:700;letter-spacing:9px;padding:18px 0;margin:16px 0;
-              background:#f9f8f6;border:1px solid #e4e2dc;border-radius:8px;text-align:center;
-              font-family:ui-monospace,'JetBrains Mono',monospace">${code}</div>
-  <p style="margin:0;color:#58554e;font-size:13px">It expires in ${minutes} minutes and can be used once.</p>
-  <p style="margin:14px 0 0;color:#c0392b;font-size:12px">If you did not try to sign in, tell your
-    administrator — it means somebody else has your password.</p>
-</div>`,
+        (consoleUrl ? `Sign in at ${consoleUrl}\n\n` : '') +
+        `If you did not try to sign in, tell your administrator — somebody has your password. ` +
+        `Nobody at Ashika will ever ask you for this code.`,
+      html,
     });
   } catch (err) {
     await emailLog.log({ ...base, status: 'failed', error_text: err.message });
