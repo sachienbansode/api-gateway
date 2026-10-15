@@ -469,6 +469,9 @@ function buildAdminRouter(logger, deps = {}) {
     next();
   }
 
+  const catalogRoutes = require('./catalogRoutes');
+  router.use('/catalog', catalogRoutes.build(logger, { flashOf, deps }));
+
   const studioRoutes = require('./studioRoutes');
   router.use('/api', studioJson, studioGuard, studioRoutes.json(logger, deps));
   router.get('/studio.js', studioRoutes.script());

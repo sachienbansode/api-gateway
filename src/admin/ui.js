@@ -205,6 +205,19 @@ pre{margin:0;white-space:pre-wrap;word-break:break-word;font-family:var(--mono);
   font-size:11.5px;background:var(--surface2);border:1px solid var(--border);
   border-radius:var(--r);padding:13px;max-height:440px;overflow:auto;color:var(--ink2)}
 
+/* ---------- confirmation ---------- */
+.confirm-ovl{position:fixed;inset:0;background:rgba(26,24,22,.42);display:flex;
+  align-items:center;justify-content:center;z-index:120;padding:20px}
+.confirm-ovl[hidden]{display:none}
+.confirm-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-lg);
+  width:100%;max-width:440px;overflow:hidden;box-shadow:0 12px 40px rgba(0,0,0,.18)}
+.confirm-card .ch{padding:13px 17px;border-bottom:1px solid var(--border);background:var(--surface2)}
+.confirm-card .ch h3{margin:0;font-size:13px;font-weight:600;color:var(--ink)}
+.confirm-card .cb{padding:16px 17px}
+.confirm-card .cb p{margin:0;font-size:12.5px;color:var(--ink2);line-height:1.55}
+.confirm-card .cf{padding:12px 17px;border-top:1px solid var(--border);display:flex;
+  justify-content:flex-end;gap:8px;background:var(--surface2)}
+
 @media(max-width:900px){
   .shell{grid-template-columns:1fr}
   aside>.inner{position:static;height:auto}
@@ -227,6 +240,8 @@ const ICON = {
   studio:
     '<path d="M12 2 4 6v6c0 5 3.4 8.5 8 10 4.6-1.5 8-5 8-10V6z" opacity=".25"/>' +
     '<path d="M9.5 12.5 11 14l3.5-3.5"/>',
+  catalog:
+    '<path d="M4 5h16v14H4z" opacity=".25"/><path d="M4 9h16M9 9v10"/>',
   activity: '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
   health:
     '<circle cx="12" cy="12" r="9" opacity=".3"/><path d="M8 12h2l1.5 4 2-8L15 12h2"/>',
@@ -235,6 +250,7 @@ const ICON = {
 const TABS = [
   ['/admin', 'Overview', 'overview', 'LIVE'],
   ['/admin/studio', 'API Studio', 'studio', 'BUILD'],
+  ['/admin/catalog', 'Catalogue', 'catalog', 'DATA'],
   ['/admin/vendors', 'Vendors', 'vendors', 'MGMT'],
   ['/admin/endpoints', 'Endpoints', 'endpoints', 'CFG'],
   ['/admin/activity', 'Activity', 'activity', 'LOGS'],
@@ -293,6 +309,52 @@ function layout({ title, admin, current, body, flash }) {
   </div></aside>
   <main>${flashHtml}${readOnly}${body}</main>
 </div>
+<script>
+/* Any submit button carrying data-confirm asks first, in the console's own
+   dialog rather than the browser's. The question names the consequence — what
+   publishing exposes, what withdrawing stops — because "Are you sure?" is a
+   question nobody can answer usefully. */
+(function () {
+  var ovl = document.createElement('div');
+  ovl.className = 'confirm-ovl';
+  ovl.hidden = true;
+  ovl.innerHTML = '<div class="confirm-card" role="dialog" aria-modal="true">' +
+    '<div class="ch"><h3></h3></div><div class="cb"><p></p></div>' +
+    '<div class="cf"><button type="button" class="no">Cancel</button>' +
+    '<button type="button" class="yes primary">Confirm</button></div></div>';
+  document.body.appendChild(ovl);
+  var title = ovl.querySelector('h3'), body = ovl.querySelector('.cb p');
+  var yes = ovl.querySelector('.yes'), no = ovl.querySelector('.no');
+  var pending = null;
+
+  function close() { ovl.hidden = true; pending = null; }
+  no.addEventListener('click', close);
+  ovl.addEventListener('mousedown', function (e) { if (e.target === ovl) close(); });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && !ovl.hidden) close();
+  });
+  yes.addEventListener('click', function () {
+    if (!pending) return;
+    var btn = pending; pending = null; ovl.hidden = true;
+    btn.dataset.confirmed = '1';
+    btn.click();
+  });
+
+  document.addEventListener('click', function (e) {
+    var btn = e.target.closest ? e.target.closest('[data-confirm]') : null;
+    if (!btn || btn.dataset.confirmed) return;
+    e.preventDefault();
+    e.stopPropagation();
+    title.textContent = btn.getAttribute('data-confirm');
+    body.textContent = btn.getAttribute('data-confirm-body') || '';
+    yes.textContent = btn.getAttribute('data-confirm-ok') || 'Confirm';
+    yes.className = btn.classList.contains('danger') ? 'yes danger' : 'yes primary';
+    pending = btn;
+    ovl.hidden = false;
+    yes.focus();
+  }, true);
+})();
+</script>
 </body></html>`;
 }
 
