@@ -418,7 +418,7 @@ function buildAdminRouter(logger, deps = {}) {
       const since = new Date(Date.now() - days * 864e5);
       const [usage, recent, quota] = await Promise.all([
         db.isEnabled() ? auditRepo.usageSummary({ since }) : [],
-        db.isEnabled() ? auditRepo.recentForVendor(null, 50).catch(() => []) : [],
+        db.isEnabled() ? auditRepo.recent(50).catch(() => []) : [],
         db.isEnabled() ? quotaRepo.allUsage().catch(() => []) : [],
       ]);
       res.type('html').send(
@@ -438,6 +438,34 @@ function buildAdminRouter(logger, deps = {}) {
       next(err);
     }
   });
+
+  // -------------------------------------------------------------------------
+  // API Studio
+  //
+  // The page is HTML; everything it does afterwards is JSON over fetch. The
+  // JSON routes require `x-requested-with`, which a cross-origin HTML form
+  // cannot set — the session cookie is SameSite=Strict as well, so this is a
+  // second lock on the same door rather than the only one.
+  // -------------------------------------------------------------------------
+  const studioJson = express.json({ limit: '1mb' });
+
+  function studioGuard(req, res, next) {
+    if (!db.isEnabled()) {
+      return res.status(503).json({ error: 'No database configured — the Studio needs one.' });
+    }
+    if (req.method !== 'GET' && req.headers['x-requested-with'] !== 'studio') {
+      return res.status(400).json({ error: 'missing x-requested-with' });
+    }
+    if (req.method !== 'GET' && !req.admin.canEdit) {
+      return res.status(403).json({ error: 'Your role is read-only here.' });
+    }
+    next();
+  }
+
+  const studioRoutes = require('./studioRoutes');
+  router.use('/api', studioJson, studioGuard, studioRoutes.json(logger, deps));
+  router.get('/studio.js', studioRoutes.script());
+  router.get('/studio', studioRoutes.page(logger, { flashOf }));
 
   router.get('/me', (req, res) => {
     res.json({

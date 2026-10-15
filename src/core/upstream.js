@@ -76,6 +76,24 @@ class UpstreamClient {
     return this.breakers.get(id);
   }
 
+  /**
+   * Swap in a new set of upstreams without replacing the client.
+   *
+   * Breakers for upstreams that survive the change are KEPT: an upstream that
+   * was failing a second ago is still failing, and resetting its breaker
+   * because an unrelated endpoint was published would send a burst of traffic
+   * at something known to be down.
+   */
+  replace(upstreams) {
+    this.upstreams = upstreams;
+    for (const id of [...this.breakers.keys()]) {
+      if (!upstreams[id]) this.breakers.delete(id);
+    }
+    for (const [id, u] of Object.entries(upstreams)) {
+      if (!this.breakers.has(id)) this.breakers.set(id, new Breaker(u.breaker));
+    }
+  }
+
   health() {
     const out = {};
     for (const [id, b] of this.breakers) out[id] = b.snapshot();

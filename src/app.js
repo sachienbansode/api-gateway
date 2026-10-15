@@ -98,6 +98,12 @@ function createApp({ logger, config } = {}) {
   // upstreams beyond breaker state, and are intended to be bound to the VNet
   // or blocked at nginx — see deploy/nginx.conf.
   // -------------------------------------------------------------------------
+  // Browsers request /favicon.ico on every page load. Without this it falls
+  // through to the vendor router, is refused as an unauthenticated call, and
+  // writes an audit row — so the audit log fills with 401s that have nothing
+  // to do with any vendor, burying the traffic you actually care about.
+  app.get('/favicon.ico', (req, res) => res.status(204).end());
+
   app.get('/healthz', (req, res) => res.json({ ok: true }));
 
   app.get('/readyz', async (req, res) => {
@@ -129,7 +135,16 @@ function createApp({ logger, config } = {}) {
   // -------------------------------------------------------------------------
   if (String(process.env.ADMIN_UI_ENABLED || 'true').toLowerCase() === 'true') {
     const { buildAdminRouter } = require('./admin/routes');
-    app.use('/admin', buildAdminRouter(logger, { config: cfg, client, audit, vendorStore }));
+    app.use(
+      '/admin',
+      buildAdminRouter(logger, {
+        // A getter, not a snapshot: the console must show what the process is
+        // serving right now, which changes when the Studio publishes.
+        get config() { return live.cfg; },
+        client, audit, vendorStore,
+        reloadCatalog: () => reloadCatalog(),
+      })
+    );
     logger.info({ path: '/admin' }, 'admin UI mounted');
   }
 
@@ -141,7 +156,7 @@ function createApp({ logger, config } = {}) {
   // The spec a vendor sees is filtered to the endpoints their scopes allow, so
   // one vendor cannot discover another partner's endpoints from the docs.
   app.get('/openapi.json', (req, res) => {
-    const visible = cfg.endpoints.filter((e) => e.scopes.some((s) => req.vendor.scopes.has(s)));
+    const visible = live.cfg.endpoints.filter((e) => e.scopes.some((s) => req.vendor.scopes.has(s)));
     res.json(
       openapi.build({
         endpoints: visible,
@@ -154,7 +169,43 @@ function createApp({ logger, config } = {}) {
     );
   });
 
-  app.use(buildRouter({ endpoints: cfg.endpoints, client, logger, observer, audit }));
+  // ---------------------------------------------------------------------
+  // The routed catalogue, which can change while the process runs.
+  //
+  // Endpoints come from two places: the YAML files in config/, and the
+  // database tables the API Studio writes. Both go through the SAME validator
+  // before anything is mounted — one definition of a valid endpoint, so a
+  // whitelist mistake made in a form fails exactly as one committed to a file
+  // would.
+  //
+  // The swap is a single assignment of `live`, so a request is served either
+  // entirely by the old catalogue or entirely by the new one. If a reload
+  // fails validation the old catalogue stays mounted and the error is logged:
+  // a bad edit must not be able to take the gateway down.
+  // ---------------------------------------------------------------------
+  const live = {
+    cfg,
+    router: buildRouter({ endpoints: cfg.endpoints, client, logger, observer, audit }),
+  };
+
+  async function reloadCatalog() {
+    if (!db.isEnabled()) return { changed: false, reason: 'no database' };
+    const catalog = require('./db/repos/catalog');
+    const merged = await catalog.mergeWithFiles(configLoader.rawSources());
+    const next = configLoader.loadFrom(merged);
+    // One client throughout, with its upstream set swapped in place, so the
+    // health screen and the request path never disagree about breaker state.
+    client.replace(next.upstreams);
+    live.cfg = next;
+    live.router = buildRouter({ endpoints: next.endpoints, client, logger, observer, audit });
+    logger.info(
+      { endpoints: next.endpoints.length, upstreams: Object.keys(next.upstreams).length },
+      'catalogue reloaded'
+    );
+    return { changed: true, endpoints: next.endpoints.length };
+  }
+
+  app.use((req, res, next) => live.router(req, res, next));
 
   // Anything not declared in the manifest ends here.
   app.use((req, res, next) => next(errors.notFound()));
@@ -171,6 +222,21 @@ function createApp({ logger, config } = {}) {
       const result = await migrate(logger);
       if (result.applied.length) {
         logger.info({ applied: result.applied }, 'migrations applied at boot');
+      }
+    }
+
+    // Fold in whatever the Studio has published. A failure here is logged and
+    // survived: the YAML catalogue is already mounted, and refusing to boot
+    // because one database row is malformed would take down endpoints that
+    // have nothing to do with it.
+    if (db.isEnabled()) {
+      try {
+        await reloadCatalog();
+      } catch (err) {
+        logger.error(
+          { err: err.message },
+          'the database catalogue could not be loaded — serving the YAML endpoints only'
+        );
       }
     }
 

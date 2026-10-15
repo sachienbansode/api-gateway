@@ -3,9 +3,13 @@
 /**
  * The login page, rendered server-side as one self-contained document.
  *
- * No build step, no CDN, no external font — the page must load on a VM whose
- * NSG blocks nearly everything outbound, and a login screen that depends on a
- * third party is a login screen that fails when that third party does.
+ * Styled to match the OmneNEST staging-api console and the rest of this admin
+ * UI — cream surface, near-black primary, gold rule, Sora + JetBrains Mono.
+ *
+ * The font is the one external reference, and the BROWSER fetches it, not the
+ * VM, so the VM's restricted egress does not come into it. If the viewer's
+ * network blocks Google Fonts the page still renders in the system stack; no
+ * layout depends on the webfont loading.
  *
  * `error` is the only interpolated value and it is escaped. It is also chosen
  * from a fixed set by the caller, never built from user input.
@@ -18,6 +22,11 @@ function esc(s) {
 }
 
 function render({ error = '', title = 'API Gateway', email = '' } = {}) {
+  // "Pravah API Gateway" → brand "Pravah", kicker "API Gateway", matching the
+  // console sidebar so the two screens read as one product.
+  const brand = title.replace(/\s*API\s*Gateway\s*$/i, '').trim() || title;
+  const kicker = brand === title ? '' : 'API Gateway';
+
   return `<!doctype html>
 <html lang="en" data-theme="auto">
 <head>
@@ -25,61 +34,59 @@ function render({ error = '', title = 'API Gateway', email = '' } = {}) {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
 <title>Sign in · ${esc(title)}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
-  :root {
-    --bg: #f4f5f7; --card: #ffffff; --fg: #1a1d23; --muted: #6b7280;
-    --line: #d9dce1; --accent: #1f3864; --accent-fg: #ffffff;
-    --err-bg: #fdeaea; --err-fg: #a4231f; --err-line: #f0b6b4;
-    --focus: #2563eb;
+  :root{
+    --bg:#f4f3f0; --surface:#fff; --surface2:#f9f8f6;
+    --border:#e4e2dc; --ink:#1a1816; --ink2:#58554e; --ink3:#9e9b94;
+    --gold:#b8860b; --gold-lt:#f7f0dc;
+    --red:#c0392b; --red-lt:#fdf0ee;
+    --blue:#1a4fa0;
+    --sans:'Sora',system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    --r:6px; --r-lg:10px;
   }
-  @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) {
-      --bg: #15171c; --card: #1d2026; --fg: #e8eaed; --muted: #9aa0a6;
-      --line: #343842; --accent: #5b8def; --accent-fg: #0d1117;
-      --err-bg: #3a1d1d; --err-fg: #f1a9a6; --err-line: #6b2b29;
-      --focus: #7aa7ff;
-    }
-  }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0; min-height: 100vh; display: flex; align-items: center;
-    justify-content: center; padding: 24px 16px; background: var(--bg);
-    color: var(--fg);
-    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
-  }
-  .card {
-    width: 100%; max-width: 380px; background: var(--card);
-    border: 1px solid var(--line); border-radius: 10px; padding: 32px 28px;
-    box-shadow: 0 1px 2px rgba(0,0,0,.05), 0 8px 24px rgba(0,0,0,.06);
-  }
-  h1 { margin: 0 0 4px; font-size: 19px; letter-spacing: -.01em; }
-  .sub { margin: 0 0 24px; color: var(--muted); font-size: 13px; }
-  label { display: block; font-size: 13px; font-weight: 600; margin: 0 0 6px; }
-  input[type=email], input[type=password] {
-    width: 100%; padding: 10px 12px; margin-bottom: 16px; font-size: 15px;
-    color: var(--fg); background: var(--bg); border: 1px solid var(--line);
-    border-radius: 6px; font-family: inherit;
-  }
-  input:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; border-color: var(--focus); }
-  button {
-    width: 100%; padding: 11px; font-size: 15px; font-weight: 600;
-    font-family: inherit; color: var(--accent-fg); background: var(--accent);
-    border: 0; border-radius: 6px; cursor: pointer;
-  }
-  button:hover { filter: brightness(1.08); }
-  button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-  .err {
-    background: var(--err-bg); color: var(--err-fg);
-    border: 1px solid var(--err-line); border-radius: 6px;
-    padding: 10px 12px; margin-bottom: 18px; font-size: 13.5px;
-  }
-  .foot { margin: 22px 0 0; padding-top: 16px; border-top: 1px solid var(--line);
-          color: var(--muted); font-size: 12px; text-align: center; }
+  @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+    --bg:#111214; --surface:#1c1e21; --surface2:#242629;
+    --border:#2e3035; --ink:#e8e9ea; --ink2:#9ca3af; --ink3:#6b7280;
+    --gold-lt:rgba(234,179,8,.14); --red-lt:rgba(239,68,68,.14);
+  }}
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+    padding:24px 16px;background:var(--bg);color:var(--ink);font-family:var(--sans);
+    font-size:13px;line-height:1.55;-webkit-font-smoothing:antialiased}
+  .card{width:100%;max-width:382px;background:var(--surface);border:1px solid var(--border);
+    border-radius:var(--r-lg);padding:30px 28px 26px;overflow:hidden}
+  .brand{display:block;font-size:19px;font-weight:600;letter-spacing:-.015em;color:var(--ink)}
+  .kicker{display:block;margin-top:3px;font-size:9.5px;font-weight:600;color:var(--ink3);
+    text-transform:uppercase;letter-spacing:1px}
+  .rule{height:2px;width:34px;background:var(--gold);border-radius:2px;margin:15px 0 19px}
+  .sub{margin:0 0 22px;color:var(--ink3);font-size:12px}
+  label{display:block;font-size:10px;font-weight:700;text-transform:uppercase;
+    letter-spacing:.6px;color:var(--ink3);margin:0 0 5px}
+  input[type=email],input[type=password]{width:100%;padding:9px 11px;margin-bottom:15px;
+    font-size:13px;font-family:inherit;color:var(--ink);background:var(--surface2);
+    border:1px solid var(--border);border-radius:var(--r);outline:none;transition:border-color .15s}
+  input:focus{border-color:var(--blue)}
+  input:focus-visible{outline:2px solid var(--blue);outline-offset:1px}
+  button{width:100%;padding:10px;font-size:13px;font-weight:500;font-family:inherit;
+    color:#fff;background:var(--ink);border:1px solid var(--ink);border-radius:var(--r);
+    cursor:pointer;margin-top:3px;transition:background .15s}
+  button:hover{background:#2d2b27}
+  button:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+  .err{background:var(--red-lt);color:var(--red);border:1px solid var(--red);
+    border-radius:var(--r);padding:10px 12px;margin-bottom:17px;font-size:12.5px}
+  .foot{margin:21px 0 0;padding-top:15px;border-top:1px solid var(--border);
+    color:var(--ink3);font-size:11px;text-align:center}
 </style>
 </head>
 <body>
   <main class="card">
-    <h1>${esc(title)}</h1>
+    <h1 style="margin:0"><span class="brand">${esc(brand)}</span>${
+      kicker ? `<span class="kicker">${esc(kicker)}</span>` : ''
+    }</h1>
+    <div class="rule"></div>
     <p class="sub">Sign in to manage vendors and endpoints.</p>
 
     ${error ? `<div class="err" role="alert">${esc(error)}</div>` : ''}

@@ -198,6 +198,25 @@ async function recentForVendor(vendorId, limit = 100) {
   return res?.rows || [];
 }
 
+/**
+ * The most recent requests across every vendor.
+ *
+ * Separate from recentForVendor because that one filters on vendor_id and
+ * returns nothing when passed null — which silently renders an empty console
+ * table that looks like "no traffic" rather than "wrong query".
+ */
+async function recent(limit = 50) {
+  const res = await db.query(
+    `SELECT request_id, occurred_at, vendor_id, endpoint, method, path,
+            status, error_code, total_ms
+       FROM gateway.audit_log
+      ORDER BY occurred_at DESC
+      LIMIT $1`,
+    [limit]
+  );
+  return res?.rows || [];
+}
+
 async function findByRequestId(requestId) {
   const res = await db.query(
     `SELECT * FROM gateway.audit_log WHERE request_id = $1`,
@@ -241,6 +260,7 @@ async function purgeOlderThan(days) {
 module.exports = {
   AuditWriter,
   recentForVendor,
+  recent,
   findByRequestId,
   usageSummary,
   purgeOlderThan,

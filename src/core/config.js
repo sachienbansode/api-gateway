@@ -45,13 +45,56 @@ function deepInterpolate(node, where) {
   return interpolate(node, where);
 }
 
+/**
+ * Where raw definitions come from.
+ *
+ * Normally the YAML files. When the catalogue lives in the database, the admin
+ * console supplies the same plain objects here instead — which means the
+ * database path runs through exactly this validation. A whitelist typo entered
+ * in a form fails the same way as one committed to YAML, with the same message.
+ * Two config sources with two validators would eventually disagree, and the
+ * disagreement would be a vendor seeing a field they should not.
+ */
+let SOURCE = null;
+
+function useSource(objOrNull) {
+  SOURCE = objOrNull;
+}
+
 function readYaml(file) {
+  if (SOURCE) {
+    const key = file.replace(/\.yaml$/, '');
+    return SOURCE[key] !== undefined ? SOURCE[key] : {};
+  }
   const full = path.join(CONFIG_DIR, file);
   if (!fs.existsSync(full)) throw new ConfigError(`Missing config file: ${full}`);
   try {
     return yaml.load(fs.readFileSync(full, 'utf8')) || {};
   } catch (err) {
     throw new ConfigError(`${file} is not valid YAML: ${err.message}`);
+  }
+}
+
+/** Extract `:param` names from a route pattern. */
+/**
+ * The YAML files as they are on disk, parsed but NOT validated.
+ *
+ * The database catalogue has to be merged with these before validation, not
+ * after: merging two already-validated sets would mean validating each half
+ * against half the picture, and an endpoint whose upstream lives in the other
+ * half would be rejected for no reason.
+ */
+function rawSources() {
+  const was = SOURCE;
+  SOURCE = null;
+  try {
+    return {
+      upstreams: readYaml('upstreams.yaml'),
+      endpoints: readYaml('endpoints.yaml'),
+      vendors: readYaml('vendors.yaml'),
+    };
+  } finally {
+    SOURCE = was;
   }
 }
 
@@ -460,4 +503,17 @@ function load() {
   return { upstreams, endpoints, vendors, vendorsByKeyHash: byHash, unreachable };
 }
 
-module.exports = { load, ConfigError, pathParams, CONFIG_DIR };
+/**
+ * Validate a complete catalogue given as plain objects, without touching disk.
+ * Throws ConfigError exactly as the YAML path does.
+ */
+function loadFrom(source) {
+  useSource(source);
+  try {
+    return load();
+  } finally {
+    useSource(null);
+  }
+}
+
+module.exports = { load, loadFrom, rawSources, ConfigError, pathParams, CONFIG_DIR };
