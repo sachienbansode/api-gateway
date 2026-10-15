@@ -409,7 +409,7 @@ function buildAdminRouter(logger, deps = {}) {
   // Screens
   //
   // `deps` carries the live objects the app already built — the parsed config,
-  // the upstream client, the audit writer, the vendor store. Reading them here
+  // the upstream client, the audit writer, the consumer store. Reading them here
   // means the console shows what the PROCESS is actually serving, not what the
   // files on disk say. Those differ whenever someone edited YAML without
   // deploying, which is exactly when you want to know.
@@ -441,7 +441,7 @@ function buildAdminRouter(logger, deps = {}) {
       .send(
         pages.overview({
           admin: { email: '', role: '', canEdit: false },
-          flash: { kind: 'err', text: 'No database configured — vendor management is unavailable.' },
+          flash: { kind: 'err', text: 'No database configured — consumer management is unavailable.' },
           cfg: cfg(),
           vendors: [],
           health: {},
@@ -467,7 +467,13 @@ function buildAdminRouter(logger, deps = {}) {
     }
   });
 
-  router.get('/vendors', async (req, res, next) => {
+  // Old links keep working. These paths were /admin/vendors until the word
+  // changed, and a bookmark or a pasted link is not a reason to see a 404.
+  router.get(/^\/vendors(\/.*)?$/, (req, res) => {
+    res.redirect(301, '/admin/consumers' + (req.params[0] || ''));
+  });
+
+  router.get('/consumers', async (req, res, next) => {
     try {
       const vendors = db.isEnabled() ? await vendorRepo.listVendorsWithKeys() : [];
       const scopes = new Set();
@@ -480,12 +486,12 @@ function buildAdminRouter(logger, deps = {}) {
     }
   });
 
-  router.post('/vendors', async (req, res, next) => {
+  router.post('/consumers', async (req, res, next) => {
     if (!requireDb(res)) return;
     try {
       const id = String(req.body.id || '').trim().toLowerCase();
       if (!/^[a-z0-9][a-z0-9_-]*$/.test(id)) {
-        return res.redirect(303, '/admin/vendors?err=' + encodeURIComponent('Invalid vendor id.'));
+        return res.redirect(303, '/admin/consumers?err=' + encodeURIComponent('Invalid consumer id.'));
       }
       let scopes = req.body.scopes || [];
       if (!Array.isArray(scopes)) scopes = [scopes];
@@ -498,15 +504,15 @@ function buildAdminRouter(logger, deps = {}) {
         rateWindowMs: req.body.rateMax ? 60000 : undefined,
         monthlyQuota: req.body.monthlyQuota ? Number(req.body.monthlyQuota) : null,
       });
-      logger?.warn({ admin: req.admin.email, vendor: id, scopes }, 'admin saved vendor');
+      logger?.warn({ admin: req.admin.email, vendor: id, scopes }, 'admin saved consumer');
       await deps.vendorStore?.refresh?.().catch(() => {});
-      res.redirect(303, '/admin/vendors?ok=' + encodeURIComponent(`Vendor "${id}" saved.`));
+      res.redirect(303, '/admin/consumers?ok=' + encodeURIComponent(`Consumer "${id}" saved.`));
     } catch (err) {
       next(err);
     }
   });
 
-  router.get('/vendors/:id', async (req, res, next) => {
+  router.get('/consumers/:id', async (req, res, next) => {
     if (!requireDb(res)) return;
     try {
       const keys = await vendorRepo.listKeys(req.params.id);
@@ -524,29 +530,29 @@ function buildAdminRouter(logger, deps = {}) {
     }
   });
 
-  router.post('/vendors/:id/toggle', async (req, res, next) => {
+  router.post('/consumers/:id/toggle', async (req, res, next) => {
     if (!requireDb(res)) return;
     try {
       const list = await vendorRepo.listVendorsWithKeys();
       const v = list.find((x) => x.id === req.params.id);
-      if (!v) return res.redirect(303, '/admin/vendors?err=' + encodeURIComponent('No such vendor.'));
+      if (!v) return res.redirect(303, '/admin/consumers?err=' + encodeURIComponent('No such consumer.'));
       await vendorRepo.setEnabled(req.params.id, !v.enabled);
       logger?.warn(
         { admin: req.admin.email, vendor: req.params.id, enabled: !v.enabled },
-        'admin toggled vendor'
+        'admin toggled consumer'
       );
       await deps.vendorStore?.refresh?.().catch(() => {});
       res.redirect(
         303,
-        '/admin/vendors?ok=' +
-          encodeURIComponent(`Vendor "${req.params.id}" ${v.enabled ? 'disabled' : 'enabled'}.`)
+        '/admin/consumers?ok=' +
+          encodeURIComponent(`Consumer "${req.params.id}" ${v.enabled ? 'disabled' : 'enabled'}.`)
       );
     } catch (err) {
       next(err);
     }
   });
 
-  router.post('/vendors/:id/keys', async (req, res, next) => {
+  router.post('/consumers/:id/keys', async (req, res, next) => {
     if (!requireDb(res)) return;
     try {
       const out = await vendorRepo.issueKey({
@@ -571,7 +577,7 @@ function buildAdminRouter(logger, deps = {}) {
     }
   });
 
-  router.post('/vendors/:id/keys/revoke', async (req, res, next) => {
+  router.post('/consumers/:id/keys/revoke', async (req, res, next) => {
     if (!requireDb(res)) return;
     try {
       await vendorRepo.revokeKey({ vendorId: req.params.id, keyHash: String(req.body.keyHash) });
@@ -579,7 +585,7 @@ function buildAdminRouter(logger, deps = {}) {
       await deps.vendorStore?.refresh?.().catch(() => {});
       res.redirect(
         303,
-        `/admin/vendors/${encodeURIComponent(req.params.id)}?ok=` +
+        `/admin/consumers/${encodeURIComponent(req.params.id)}?ok=` +
           encodeURIComponent('Key revoked. Takes up to 30s to apply.')
       );
     } catch (err) {

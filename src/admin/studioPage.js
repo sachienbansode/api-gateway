@@ -184,7 +184,7 @@ function render({ admin, bootstrap, flash }) {
       <li data-step="1" data-n="1"><b>Third-party API</b><span>Supplier, auth, live test</span></li>
       <li data-step="2" data-n="2"><b>Our endpoint</b><span>Path, type, category</span></li>
       <li data-step="3" data-n="3"><b>Transformation</b><span>Request and response</span></li>
-      <li data-step="4" data-n="4"><b>Final test</b><span>What the vendor sees</span></li>
+      <li data-step="4" data-n="4"><b>Final test</b><span>What the consumer sees</span></li>
     </ol>
   </aside>
 
@@ -203,7 +203,7 @@ function render({ admin, bootstrap, flash }) {
             <p class="hint">Pick one already onboarded, or add a new one.</p></div>
           <div class="f"><label for="upName">Reference</label>
             <input id="upName" placeholder="cmots" spellcheck="false">
-            <p class="hint">Lowercase, no spaces. Used in config, never shown to a vendor.</p></div>
+            <p class="hint">Lowercase, no spaces. Used in config, never shown to a consumer.</p></div>
           <div class="f"><label for="upDisplay">Display name</label>
             <input id="upDisplay" placeholder="CMOTS Stock APIs"></div>
           <div class="f"><label for="upVendor">Supplied by</label>
@@ -292,7 +292,7 @@ function render({ admin, bootstrap, flash }) {
           <div class="f" style="grid-column:span 2"><label for="epPath">Our path</label>
             <input id="epPath" placeholder="/v1/cmots/company-master/:co_code"
                    spellcheck="false" style="font-family:var(--mono)">
-            <p class="hint">What the vendor calls. <code>:name</code> marks a path parameter.</p></div>
+            <p class="hint">What the consumer calls. <code>:name</code> marks a path parameter.</p></div>
           <div class="f" style="grid-column:span 2"><label for="epUpPath">Supplier path</label>
             <input id="epUpPath" placeholder="/Market/api/CompanyMaster/:co_code"
                    spellcheck="false" style="font-family:var(--mono)">
@@ -344,7 +344,7 @@ function render({ admin, bootstrap, flash }) {
                 <input id="epAuthSecret" type="password" autocomplete="new-password"
                        placeholder="paste the key for this endpoint" spellcheck="false">
                 <p class="hint" id="epCredStatus">Encrypted with the same key as the supplier
-                  credentials. Never stored in plain text and never sent to a vendor.</p>
+                  credentials. Never stored in plain text and never sent to a consumer.</p>
                 <div class="tools" style="margin-top:7px">
                   <button type="button" id="btnSaveEpKey">Save key</button>
                   <button type="button" id="btnTestEpKey">Test key</button>
@@ -380,7 +380,7 @@ function render({ admin, bootstrap, flash }) {
               adds later cannot appear.</span></div>
           <div class="mode warn" data-mode="redact"><b>Redact</b>
             <span>Forward everything except the fields you exclude. New supplier fields
-              reach the vendor.</span></div>
+              reach the consumer.</span></div>
           <div class="mode danger" data-mode="passthrough"><b>Passthrough</b>
             <span>Forward the supplier's body verbatim. Nothing is filtered.</span></div>
         </div>
@@ -400,7 +400,7 @@ function render({ admin, bootstrap, flash }) {
             <button type="button" id="btnAddParam">Add parameter</button>
             <button type="button" id="btnParamsFromPath">Read from the paths above</button>
             <span class="n" id="paramMsg">A <strong>fixed</strong> or <strong>variable</strong>
-              parameter is one the vendor cannot influence — that is how an account code stays
+              parameter is one the consumer cannot influence — that is how an account code stays
               ours.</span>
           </div>
         </fieldset>
@@ -438,7 +438,7 @@ function render({ admin, bootstrap, flash }) {
     <section class="step" id="step4">
       <div class="sh" data-toggle="step4">
         <span class="no">4</span><h3>Final test</h3>
-        <span class="sub">the vendor's view, before anyone is given it</span>
+        <span class="sub">the consumer's view, before anyone is given it</span>
         <span class="right"><span id="s4status"></span><span class="caret">▾</span></span>
       </div>
       <div class="sb">
@@ -451,7 +451,7 @@ function render({ admin, bootstrap, flash }) {
         <div class="split hidden" id="s4split">
           <div class="jsonbox"><div class="jh"><span>Supplier → us</span><span id="s4upmeta"></span></div>
             <pre id="s4raw"></pre></div>
-          <div class="jsonbox"><div class="jh"><span>Us → vendor</span><span id="s4vmeta"></span></div>
+          <div class="jsonbox"><div class="jh"><span>Us → consumer</span><span id="s4vmeta"></span></div>
             <pre id="s4proj"></pre></div>
         </div>
         <div class="err-inline hidden" id="s4err"></div>

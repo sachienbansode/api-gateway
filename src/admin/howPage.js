@@ -18,15 +18,15 @@ const { esc, layout, pageHead, panel } = require('./ui');
  */
 
 // ---------------------------------------------------------------------------
-// Diagram 1: one vendor call, end to end
+// Diagram 1: one consumer call, end to end
 // ---------------------------------------------------------------------------
 function requestDiagram(baseUrl) {
   const host = (baseUrl || 'https://pravah.ashikagroup.com').replace(/^https?:\/\//, '');
   return `
 <svg class="flow" viewBox="0 0 980 400" role="img"
-     aria-label="A vendor call enters the gateway, is authenticated and matched against the
+     aria-label="A consumer call enters the gateway, is authenticated and matched against the
        declared endpoints, forwarded to the supplier with Ashika's own credential, and the
-       reply is rebuilt field by field from the whitelist before it reaches the vendor.">
+       reply is rebuilt field by field from the whitelist before it reaches the consumer.">
   <defs>
     <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7"
             orient="auto-start-reverse">
@@ -50,7 +50,7 @@ function requestDiagram(baseUrl) {
   <text x="471" y="40" class="lane" text-anchor="middle">PRAVAH &middot; ${esc(host)}</text>
   <text x="851" y="40" class="lane" text-anchor="middle">THE SUPPLIER</text>
 
-  <!-- vendor -->
+  <!-- consumer -->
   <text x="91" y="92"  class="h" text-anchor="middle">Partner system</text>
   <text x="91" y="116" class="s" text-anchor="middle">Holds an API key</text>
   <text x="91" y="134" class="s" text-anchor="middle">issued by us</text>
@@ -63,7 +63,7 @@ function requestDiagram(baseUrl) {
     <rect x="231" y="80" width="230" height="58" rx="6" fill="var(--surface2)" stroke="var(--border)"/>
     <text x="246" y="104" class="n">1</text>
     <text x="266" y="104" class="h">Who is calling?</text>
-    <text x="266" y="124" class="s">Key hashed, matched to a vendor</text>
+    <text x="266" y="124" class="s">Key hashed, matched to a consumer</text>
 
     <rect x="231" y="152" width="230" height="58" rx="6" fill="var(--surface2)" stroke="var(--border)"/>
     <text x="246" y="176" class="n">2</text>
@@ -85,7 +85,7 @@ function requestDiagram(baseUrl) {
         fill="var(--gold-lt)" stroke="var(--gold)"/>
   <text x="601" y="104" class="h" text-anchor="middle">The call is rebuilt</text>
   <text x="506" y="128" class="s">+ Ashika's own credential</text>
-  <text x="506" y="148" class="s">− every header the vendor sent</text>
+  <text x="506" y="148" class="s">− every header the consumer sent</text>
   <text x="506" y="168" class="s">only allowlisted query values</text>
   <text x="506" y="188" class="s">timeout &amp; circuit breaker</text>
 
@@ -103,7 +103,7 @@ function requestDiagram(baseUrl) {
   <rect x="781" y="112" width="140" height="80" rx="6" fill="var(--surface)" stroke="var(--border)"/>
   <text x="851" y="134" class="s" text-anchor="middle">Sees a call from</text>
   <text x="851" y="152" class="s" text-anchor="middle">Ashika, never</text>
-  <text x="851" y="170" class="s" text-anchor="middle">from the vendor</text>
+  <text x="851" y="170" class="s" text-anchor="middle">from the consumer</text>
   <text x="851" y="228" class="s" text-anchor="middle">Returns its full</text>
   <text x="851" y="246" class="s" text-anchor="middle">response</text>
 
@@ -142,7 +142,7 @@ function buildDiagram() {
     ['Sign in', 'Your Ananta account. A role must', 'grant the api-gateway page.'],
     ['Step 1 · Supplier', 'Base URL and credential. The token', 'is encrypted before it is stored.'],
     ['Step 2 · Our endpoint', 'The path we publish instead,', 'which hides theirs.'],
-    ['Step 3 · Fields', 'Tick what a vendor may see.', 'Everything else is withheld.'],
+    ['Step 3 · Fields', 'Tick what a consumer may see.', 'Everything else is withheld.'],
     ['Step 4 · Test', 'A real call to the supplier,', 'then the real projection.'],
   ].map((b, i) => {
     const x = 10 + i * 194;
@@ -170,18 +170,18 @@ function render({ admin, flash, baseUrl }) {
 ${pageHead('How it works',
   'What this gateway does to a call, and where each decision is made.')}
 
-${panel('One vendor call, end to end', '', requestDiagram(baseUrl))}
+${panel('One consumer call, end to end', '', requestDiagram(baseUrl))}
 
-${panel('What a vendor never receives', '', `
+${panel('What a consumer never receives', '', `
   <ul class="never">
     <li><b>The supplier's address.</b> They call a path on our host. Which third party answers
       it, and at which URL, is not in the response, the headers or the error messages.</li>
-    <li><b>Our credential.</b> The vendor's key identifies the vendor. The supplier's token is
+    <li><b>Our credential.</b> The consumer's key identifies the consumer. The supplier's token is
       added here, server-side, and travels only between this gateway and the supplier.</li>
     <li><b>Any field not ticked.</b> On a whitelist endpoint the response is built from an
       empty object by copying in the named fields. A field the supplier adds next month
       cannot appear, because nothing copies it.</li>
-    <li><b>Another partner's endpoints.</b> The API documentation each vendor sees is filtered
+    <li><b>Another partner's endpoints.</b> The API documentation each consumer sees is filtered
       to the scopes they hold.</li>
   </ul>`)}
 
@@ -190,7 +190,7 @@ ${panel('How an endpoint comes to exist', '', buildDiagram())}
 ${panel('Where things are kept, and what is not kept at all', '', `
   <dl class="cfg">
     <dt>Supplier data</dt>
-      <dd><b>Nowhere here.</b> A response passes through this gateway to the vendor and is not
+      <dd><b>Nowhere here.</b> A response passes through this gateway to the consumer and is not
         written down. The datalake (<span class="mono">uat_ananta_staging.cmots</span>) is loaded
         separately, on its own schedule, by its own job. This console holds the SHAPE of a
         response — that a field exists and its type — never a value from it.</dd>
@@ -202,14 +202,14 @@ ${panel('Where things are kept, and what is not kept at all', '', `
       <dd>Your Ananta account — the same password, the same deactivation. The grant is read
         fresh on every request, so removing someone takes effect in seconds rather than when
         their session expires. A role marked for MFA must enter an emailed code.</dd>
-    <dt>Vendor API keys</dt>
+    <dt>Consumer API keys</dt>
       <dd>Only as hashes. We can check a key presented to us; we cannot tell you what it is.
         A lost key is replaced, not recovered.</dd>
   </dl>`)}
 
 ${panel('If something looks wrong', '', `
   <dl class="cfg">
-    <dt>A vendor reports a missing field</dt>
+    <dt>A consumer reports a missing field</dt>
       <dd>Open the endpoint in the <a href="/admin/catalog">Catalogue</a> and look at the
         withheld list. If it should be exposed, tick it in the Studio and publish — that is
         the whole change.</dd>
@@ -220,7 +220,7 @@ ${panel('If something looks wrong', '', `
     <dt>A supplier is slow or down</dt>
       <dd><a href="/admin/health">Health</a> shows the circuit breaker. An open breaker means
         the gateway has stopped calling a failing supplier on purpose, rather than making
-        every vendor wait for a timeout.</dd>
+        every consumer wait for a timeout.</dd>
   </dl>`)}
 
 <style>

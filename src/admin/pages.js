@@ -8,7 +8,7 @@ const { esc, layout, pageHead, panel, tablePanel, fmtDate, fmtNum } = require('.
  * Endpoints are deliberately READ-ONLY. They are declared in
  * config/endpoints.yaml, reviewed as a git diff, and validated by
  * `npm run validate` before a deploy restarts anything. That review step is the
- * security model: a change to which fields a vendor can see should be
+ * security model: a change to which fields a consumer can see should be
  * something a person approved, not something a form submitted. The screen
  * shows exactly what is exposed so it can be audited without reading YAML.
  */
@@ -68,7 +68,7 @@ function overview({ admin, flash, cfg, vendors, health, usage }) {
             ? '<span class="badge warn">not protected against upstream change</span>'
             : '<span class="badge ok">none</span>'
         }</td></tr>
-    <tr><td><strong>Reachable by no vendor</strong><div class="t2">No enabled vendor holds the required scopes</div></td>
+    <tr><td><strong>Reachable by no consumer</strong><div class="t2">No enabled consumer holds the required scopes</div></td>
         <td class="num">${cfg.unreachable.length}</td>
         <td class="actions">${
           cfg.unreachable.length
@@ -82,7 +82,7 @@ function overview({ admin, flash, cfg, vendors, health, usage }) {
 <table>
   <tbody>
     <tr><td><strong>Gateway database</strong></td><td class="actions">${dbPill}</td></tr>
-    <tr><td><strong>Vendor keys</strong></td>
+    <tr><td><strong>Consumer keys</strong></td>
         <td class="actions"><span class="badge mute">${esc(health.vendorStore?.source || 'unknown')}</span></td></tr>
     <tr><td><strong>Audit queue</strong></td>
         <td class="actions">${
@@ -98,7 +98,7 @@ function overview({ admin, flash, cfg, vendors, health, usage }) {
 ${pageHead('Overview', 'What this gateway is exposing right now.')}
 <div class="stats">
   ${stat('Endpoints', cfg.endpoints.length)}
-  ${stat('Vendors', `${active}<small> / ${vendors.length}</small>`)}
+  ${stat('Consumers', `${active}<small> / ${vendors.length}</small>`)}
   ${stat('Live keys', liveKeys)}
   ${stat('Calls · 30d', fmtNum(calls))}
   ${stat('Errors · 30d', fmtNum(errors), errors > 0 ? 'alert' : 'good')}
@@ -118,7 +118,7 @@ ${pageHead('Overview', 'What this gateway is exposing right now.')}
 }
 
 // ---------------------------------------------------------------------------
-// Vendors
+// Consumers
 // ---------------------------------------------------------------------------
 
 function vendorsPage({ admin, flash, vendors, cfg, issuedKey, scopes }) {
@@ -139,10 +139,10 @@ function vendorsPage({ admin, flash, vendors, cfg, issuedKey, scopes }) {
   <td class="num">${v.monthly_quota ? fmtNum(v.monthly_quota) : '∞'}</td>
   <td class="t2">${fmtDate(v.last_used_at)}</td>
   <td class="actions">
-    <a class="btn" href="/admin/vendors/${encodeURIComponent(v.id)}">Keys</a>
+    <a class="btn" href="/admin/consumers/${encodeURIComponent(v.id)}">Keys</a>
     ${
       admin.canEdit
-        ? `<form class="inline" method="post" action="/admin/vendors/${encodeURIComponent(v.id)}/toggle">
+        ? `<form class="inline" method="post" action="/admin/consumers/${encodeURIComponent(v.id)}/toggle">
              <button type="submit">${v.enabled ? 'Disable' : 'Enable'}</button></form>`
         : ''
     }
@@ -150,7 +150,7 @@ function vendorsPage({ admin, flash, vendors, cfg, issuedKey, scopes }) {
 </tr>`
         )
         .join('')
-    : EMPTY(7, 'No vendors yet. Add one below, then issue it a key.');
+    : EMPTY(7, 'No consumers yet. Add one below, then issue it a key.');
 
   const scopeChecks = allScopes.length
     ? `<div class="checks">${allScopes
@@ -164,11 +164,11 @@ function vendorsPage({ admin, flash, vendors, cfg, issuedKey, scopes }) {
 
   const addForm = admin.canEdit
     ? panel(
-        'Add or update a vendor',
-        'Using an existing id updates that vendor rather than creating a second one.',
-        `<form method="post" action="/admin/vendors">
+        'Add or update a consumer',
+        'Using an existing id updates that consumer rather than creating a second one.',
+        `<form method="post" action="/admin/consumers">
   <div class="fields">
-    <div class="f"><label for="id">Vendor id</label>
+    <div class="f"><label for="id">Consumer id</label>
       <input id="id" name="id" type="text" required pattern="[a-z0-9][a-z0-9_-]*" placeholder="acme">
       <p class="hint">Lower case, no spaces. Appears in the audit log.</p></div>
     <div class="f"><label for="name">Display name</label>
@@ -185,10 +185,10 @@ function vendorsPage({ admin, flash, vendors, cfg, issuedKey, scopes }) {
     <legend>Scopes</legend>
     ${scopeChecks}
     <p class="hint" style="color:var(--muted);font-size:12.5px;margin-top:10px">
-      A vendor reaches only the endpoints whose scopes it holds. No scopes means no access.</p>
+      A consumer reaches only the endpoints whose scopes it holds. No scopes means no access.</p>
   </fieldset>
   <div class="formfoot">
-    <button class="primary" type="submit">Save vendor</button>
+    <button class="primary" type="submit">Save consumer</button>
     <span class="hint">Takes effect within 30 seconds — auth is kept off the database hot path.</span>
   </div>
 </form>`
@@ -202,18 +202,18 @@ function vendorsPage({ admin, flash, vendors, cfg, issuedKey, scopes }) {
     : '';
 
   const body = `
-${pageHead('Vendors', 'Who may call this gateway, what they may reach, and with which keys.')}
+${pageHead('Consumers', 'Who may call this gateway, what they may reach, and with which keys.')}
 ${keyBox}
 ${tablePanel(
-  'All vendors',
+  'All consumers',
   '',
-  `<th>Vendor</th><th>Status</th><th>Scopes</th><th class="num">Keys</th>
+  `<th>Consumer</th><th>Status</th><th>Scopes</th><th class="num">Keys</th>
    <th class="num">Quota</th><th>Last used</th><th></th>`,
   rows
 )}
 ${addForm}`;
 
-  return layout({ title: 'Vendors', admin, current: '/admin/vendors', body, flash });
+  return layout({ title: 'Consumers', admin, current: '/admin/consumers', body, flash });
 }
 
 function vendorKeysPage({ admin, flash, vendorId, keys, issuedKey }) {
@@ -236,7 +236,7 @@ function vendorKeysPage({ admin, flash, vendorId, keys, issuedKey }) {
   <td class="t2">${fmtDate(k.last_used_at)}</td>
   <td class="actions">${
     !revoked && admin.canEdit
-      ? `<form class="inline" method="post" action="/admin/vendors/${encodeURIComponent(vendorId)}/keys/revoke">
+      ? `<form class="inline" method="post" action="/admin/consumers/${encodeURIComponent(vendorId)}/keys/revoke">
            <input type="hidden" name="keyHash" value="${esc(k.key_hash)}">
            <button class="danger" type="submit">Revoke</button></form>`
       : ''
@@ -254,12 +254,12 @@ function vendorKeysPage({ admin, flash, vendorId, keys, issuedKey }) {
   const issueForm = admin.canEdit
     ? panel(
         'Issue a new key',
-        'Issue the new key, let the vendor cut over, then revoke the old one. No downtime.',
-        `<form method="post" action="/admin/vendors/${encodeURIComponent(vendorId)}/keys">
+        'Issue the new key, let the consumer cut over, then revoke the old one. No downtime.',
+        `<form method="post" action="/admin/consumers/${encodeURIComponent(vendorId)}/keys">
   <div class="fields">
     <div class="f"><label for="label">Label</label>
       <input id="label" name="label" type="text" placeholder="rotation 2026-10">
-      <p class="hint">For your records. Never sent to the vendor.</p></div>
+      <p class="hint">For your records. Never sent to the consumer.</p></div>
   </div>
   <div class="formfoot"><button class="primary" type="submit">Issue key</button>
     <span class="hint">Shown once, then only its hash is kept.</span></div>
@@ -271,7 +271,7 @@ function vendorKeysPage({ admin, flash, vendorId, keys, issuedKey }) {
 ${pageHead(
   `Keys · ${esc(vendorId)}`,
   'Only the SHA-256 hash of each key is stored, so a database dump yields nothing usable.',
-  '<a class="btn" href="/admin/vendors">← All vendors</a>'
+  '<a class="btn" href="/admin/consumers">← All consumers</a>'
 )}
 ${keyBox}
 ${tablePanel(
@@ -282,7 +282,7 @@ ${tablePanel(
 )}
 ${issueForm}`;
 
-  return layout({ title: `Keys · ${vendorId}`, admin, current: '/admin/vendors', body, flash });
+  return layout({ title: `Keys · ${vendorId}`, admin, current: '/admin/consumers', body, flash });
 }
 
 // ---------------------------------------------------------------------------
@@ -344,7 +344,7 @@ ${tablePanel(
 )}
 ${tablePanel(
   'Upstreams',
-  'Never visible to a vendor. A credential comes either from the environment file or from the ' +
+  'Never visible to a consumer. A credential comes either from the environment file or from the ' +
     'database sealed with AES-256-GCM, and neither is shown here — the API Studio is where a ' +
     'credential is set, replaced or read, and every one of those is written to the access log.',
   '<th>Name</th><th>Base URL</th><th>Auth</th><th class="num">Timeout</th>',
@@ -355,7 +355,7 @@ ${panel(
   '',
   `<p class="note" style="margin:0">Endpoints are declared in <strong>config/endpoints.yaml</strong>,
    reviewed as a git diff, and validated by <strong>npm run validate</strong> before a deploy restarts
-   anything. That review step is the control: a change to which fields a vendor can see should be
+   anything. That review step is the control: a change to which fields a consumer can see should be
    something a person approved, not something a form submitted. Editing them here would remove it.</p>`
 )}`;
 
@@ -432,22 +432,22 @@ ${pageHead(
   `Last ${days} days. The audit log records status codes and timings — never request or response bodies, and never header values.`
 )}
 ${tablePanel(
-  'Usage by vendor and endpoint',
+  'Usage by consumer and endpoint',
   '',
-  `<th>Vendor</th><th>Endpoint</th><th class="num">Calls</th><th class="num">Errors</th>
+  `<th>Consumer</th><th>Endpoint</th><th class="num">Calls</th><th class="num">Errors</th>
    <th class="num">Avg</th><th class="num">p95</th><th>Last call</th>`,
   usageRows
 )}
 ${tablePanel(
   'Monthly quota',
-  'Calendar month in UTC. Quota fails <strong>open</strong> if the database is unreachable — billing accuracy is not worth refusing a vendor request.',
-  '<th>Vendor</th><th class="num">Used</th><th class="num">Limit</th><th></th>',
+  'Calendar month in UTC. Quota fails <strong>open</strong> if the database is unreachable — billing accuracy is not worth refusing a consumer request.',
+  '<th>Consumer</th><th class="num">Used</th><th class="num">Limit</th><th></th>',
   quotaRows
 )}
 ${tablePanel(
   'Recent requests',
-  'The request id is what a vendor quotes when something goes wrong — trace it with <span class="mono">node scripts/gw.js audit:trace &lt;id&gt;</span>.',
-  `<th>When</th><th>Vendor</th><th>Request</th><th class="num">Status</th>
+  'The request id is what a consumer quotes when something goes wrong — trace it with <span class="mono">node scripts/gw.js audit:trace &lt;id&gt;</span>.',
+  `<th>When</th><th>Consumer</th><th>Request</th><th class="num">Status</th>
    <th class="num">Time</th><th>Request id</th>`,
   recentRows
 )}`;

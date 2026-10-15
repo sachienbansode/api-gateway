@@ -544,7 +544,7 @@
         'cannot go live. It will not fall back to the supplier credential.'));
     } else {
       n.textContent = 'Encrypted with the same key as the supplier credentials. ' +
-        'Never stored in plain text and never sent to a vendor.';
+        'Never stored in plain text and never sent to a consumer.';
     }
   }
 
@@ -717,7 +717,7 @@
     var warn = $('modeWarn');
     if (m === 'passthrough') {
       warn.textContent = 'Passthrough forwards the supplier’s body exactly as it arrives. ' +
-        'Anything they add later — a PAN, an internal cost — reaches the vendor the day they add it. ' +
+        'Anything they add later — a PAN, an internal cost — reaches the consumer the day they add it. ' +
         'Publishing records that you chose this.';
       show(warn, true);
     } else if (m === 'redact') {
@@ -734,7 +734,7 @@
 
   // --- request parameters ---
   var LOCS = ['path', 'query', 'header', 'body'];
-  var SRCS = [['vendor', 'the vendor'], ['fixed', 'a fixed value'], ['env', 'a variable']];
+  var SRCS = [['vendor', 'the consumer'], ['fixed', 'a fixed value'], ['env', 'a variable']];
   var TYPES = ['string', 'int', 'number', 'bool', 'date', 'enum'];
 
   function renderParams() {
@@ -835,7 +835,7 @@
     var on = S.fields.filter(function (f) { return f.exposed; }).length;
     $('fieldCount').textContent = on + ' of ' + S.fields.length + ' exposed';
     $('fieldHint').textContent = S.mode === 'whitelist'
-      ? 'The vendor receives exactly these ' + on + ' field(s) and nothing else. A field the ' +
+      ? 'The consumer receives exactly these ' + on + ' field(s) and nothing else. A field the ' +
         'supplier adds later arrives unticked, so it cannot leak by default.'
       : '';
     renderExclude();
@@ -881,7 +881,7 @@
     S.discovered.forEach(function (p) {
       if (!have[p]) {
         // Arrives unticked on purpose: a field nobody has decided about is not
-        // a field the vendor should be receiving.
+        // a field the consumer should be receiving.
         S.fields.push({ path: p, exposed: false, discovered: true, data_type: null, description: null });
         added++;
       }
@@ -959,7 +959,7 @@
       if (r.ms !== undefined) res.appendChild(badge('mute', r.ms + ' ms'));
       if (j.upstreamFields !== undefined) {
         res.appendChild(badge('mute', j.upstreamFields + ' fields from the supplier'));
-        res.appendChild(badge(j.exposedFields ? 'info' : 'off', j.exposedFields + ' reach the vendor'));
+        res.appendChild(badge(j.exposedFields ? 'info' : 'off', j.exposedFields + ' reach the consumer'));
         var held = j.upstreamFields - j.exposedFields;
         if (held > 0) res.appendChild(badge('ok', held + ' withheld'));
       }

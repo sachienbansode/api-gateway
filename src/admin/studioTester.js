@@ -6,7 +6,7 @@ const projection = require('../core/projection');
  * The "Test" buttons behind steps 1 and 4.
  *
  * Step 1 asks: does the supplier answer us, with what, and how fast.
- * Step 4 asks: given that answer, what exactly would a vendor receive.
+ * Step 4 asks: given that answer, what exactly would a consumer receive.
  *
  * Both run here, on the server, for the same reason the gateway exists: the
  * supplier's credential must never reach a browser. The admin's browser sends
@@ -328,7 +328,7 @@ function typeName(v) {
 
 /**
  * Apply the endpoint's response rules to a sample body — the step 4 answer to
- * "what does the vendor actually see".
+ * "what does the consumer actually see".
  */
 function project({ mode, fields = [], exclude = [], rename = {} }, body) {
   try {
@@ -339,7 +339,7 @@ function project({ mode, fields = [], exclude = [], rename = {} }, body) {
     }
     const chosen = fields.filter(Boolean);
     if (!chosen.length) {
-      return { ok: false, error: 'no field is ticked, so the vendor would receive an empty object' };
+      return { ok: false, error: 'no field is ticked, so the consumer would receive an empty object' };
     }
     const fn = projection.compile(chosen, rename, 'studio');
     return { ok: true, result: fn(body) };

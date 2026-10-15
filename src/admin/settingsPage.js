@@ -153,7 +153,7 @@ ${pageHead('Admin config', 'Settings that belong to the product rather than to t
     <div class="formfoot">
       <button type="submit" class="primary"
         data-confirm="Save these settings?"
-        data-confirm-body="The public base URL appears in every Postman collection and in the API documentation partners work from. Changing it does not move the gateway — it changes what vendors are told to call.">Save</button>
+        data-confirm-body="The public base URL appears in every Postman collection and in the API documentation partners work from. Changing it does not move the gateway — it changes what consumers are told to call.">Save</button>
       <p class="hint">A blank field falls back to the environment, which is what a fresh
         deployment uses.</p>
     </div>`)}

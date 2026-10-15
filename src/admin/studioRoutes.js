@@ -628,7 +628,7 @@ function json(logger, deps = {}) {
       res.json({
         endpoint: saved,
         note: status === 'live'
-          ? 'Vendors still need the ep: scope before they can call it.'
+          ? 'Consumers still need the ep: scope before they can call it.'
           : '',
       });
     } catch (err) {
@@ -706,7 +706,7 @@ function json(logger, deps = {}) {
         error: result.error || (projection.ok ? null : projection.error),
         fieldCount: exposedFields,
         // Only the PROJECTED body is kept: by construction it holds nothing
-        // the vendor would not have been given anyway. The supplier's raw
+        // the consumer would not have been given anyway. The supplier's raw
         // response is the thing being protected and is not written down.
         responseSample: projection.ok ? projection.result : null,
       }).catch(() => {});

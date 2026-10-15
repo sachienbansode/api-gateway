@@ -12,9 +12,9 @@
  * VM's restricted egress is irrelevant here. The stack still degrades to system
  * fonts if the request is blocked at the viewer's end.
  *
- * Everything that reaches the page goes through `esc`. Vendor names and labels
+ * Everything that reaches the page goes through `esc`. Consumer names and labels
  * are operator-supplied; one unescaped `<` is stored XSS against the person who
- * can change what every vendor sees.
+ * can change what every consumer sees.
  */
 
 function esc(s) {
@@ -53,13 +53,41 @@ a{color:var(--blue);text-decoration:none}
 a:hover{text-decoration:underline}
 
 /* ---------- shell ---------- */
-.shell{display:grid;grid-template-columns:234px 1fr;min-height:100vh}
+.shell{display:grid;grid-template-columns:234px 1fr;min-height:100vh;
+  transition:grid-template-columns .16s ease}
+
+/* Collapsed sidebar.
+   The width is driven from the <html> element, set by a script in <head>
+   before the first paint — a class added after load would show the sidebar at
+   full width and then snap, which looks like a bug every single time. */
+html.navmin .shell{grid-template-columns:58px 1fr}
+html.navmin aside .logo .t,
+html.navmin aside nav a span,
+html.navmin aside nav a .tag,
+html.navmin aside .navsec,
+html.navmin aside .who .em,
+html.navmin aside .who .rl{display:none}
+html.navmin aside .logo{padding:16px 0 14px;justify-content:center}
+html.navmin aside nav a{justify-content:center;padding:9px 0}
+html.navmin aside .who{padding:11px 8px;text-align:center}
+html.navmin aside .who form button{padding:6px 4px;font-size:10.5px}
+html.navmin .navtoggle{transform:rotate(180deg)}
+/* Collapsed, the label is gone, so the only thing naming a destination is the
+   title attribute. Without this an icon-only rail is a guessing game. */
+.navtoggle{position:absolute;top:18px;right:-11px;width:22px;height:22px;z-index:5;
+  display:flex;align-items:center;justify-content:center;cursor:pointer;
+  background:var(--surface);border:1px solid var(--border);border-radius:50%;
+  color:var(--ink3);padding:0;transition:transform .16s ease,color .15s}
+.navtoggle:hover{color:var(--ink);background:var(--surface2)}
+.navtoggle svg{width:12px;height:12px}
+@media(max-width:860px){.navtoggle{display:none}}
 /* The aside itself STRETCHES to the full height of the grid row, so its
    background and border run the whole length of the page. Only its contents
    stick. Making the aside itself sticky with height:100vh left the column
    blank below the fold on any page taller than the viewport — which is most
    of them. */
 aside{background:var(--surface);border-right:1px solid var(--border)}
+aside{position:relative}
 aside>.inner{position:sticky;top:0;height:100vh;display:flex;flex-direction:column}
 .logo{padding:16px 18px 14px;border-bottom:1px solid var(--border);
   display:flex;align-items:center;gap:11px}
@@ -236,7 +264,7 @@ const ICON = {
     + '<path d="M12 17h.01"/>',
   overview:
     '<path d="M3 3h7v7H3zM14 3h7v4h-7zM14 11h7v10h-7zM3 14h7v7H3z"/>',
-  vendors:
+  consumers:
     '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/>',
   endpoints:
     '<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/>',
@@ -256,7 +284,7 @@ const TABS = [
   ['/admin', 'Overview', 'overview', 'LIVE'],
   ['/admin/studio', 'API Studio', 'studio', 'BUILD'],
   ['/admin/catalog', 'Catalogue', 'catalog', 'DATA'],
-  ['/admin/vendors', 'Vendors', 'vendors', 'MGMT'],
+  ['/admin/consumers', 'Consumers', 'consumers', 'MGMT'],
   ['/admin/endpoints', 'Endpoints', 'endpoints', 'CFG'],
   ['/admin/activity', 'Activity', 'activity', 'LOGS'],
   ['/admin/health', 'Health', 'health', ''],
@@ -296,10 +324,14 @@ function currentBrand() {
 }
 
 function layout({ title, admin, current, body, flash }) {
+  // title on every link: collapsed, the label is hidden and the icon is the
+  // only thing naming a destination, which makes an icon-only rail a guessing
+  // game without it.
   const nav = TABS.map(
     ([href, label, icon, tag]) =>
-      `<a href="${href}"${href === current ? ' aria-current="page"' : ''}>${svg(icon)}` +
-      `<span>${esc(label)}</span>${tag ? `<span class="tag">${esc(tag)}</span>` : ''}</a>`
+      `<a href="${href}" title="${esc(label)}"${href === current ? ' aria-current="page"' : ''}>` +
+      `${svg(icon)}<span>${esc(label)}</span>` +
+      `${tag ? `<span class="tag">${esc(tag)}</span>` : ''}</a>`
   ).join('');
 
   const flashHtml = flash
@@ -327,9 +359,24 @@ function layout({ title, admin, current, body, flash }) {
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>${STYLE}</style>
+<script>
+/* Applied BEFORE the first paint. Setting this after load would render the
+   sidebar at full width and then snap it narrow, which reads as a glitch every
+   single time. Wrapped because storage throws rather than returning null in a
+   private window, and a sidebar preference is not worth a broken page. */
+try { if (localStorage.getItem('gw_nav') === 'min') document.documentElement.className += ' navmin'; } catch (e) {}
+</script>
 </head><body>
 <div class="shell">
-  <aside><div class="inner">
+  <aside>
+    <button type="button" class="navtoggle" id="navtoggle"
+            aria-label="Collapse the menu" aria-expanded="true" title="Collapse the menu">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"
+           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M15 18l-6-6 6-6"/>
+      </svg>
+    </button>
+    <div class="inner">
     <div class="logo">
       <img src="/admin/logo.png" alt="" width="34" height="34">
       <div class="t"><b>${brand}</b><span>${tagline}</span></div>
@@ -344,6 +391,27 @@ function layout({ title, admin, current, body, flash }) {
   </div></aside>
   <main>${flashHtml}${readOnly}${body}</main>
 </div>
+<script>
+(function () {
+  var b = document.getElementById('navtoggle');
+  if (!b) return;
+  function paint() {
+    var min = document.documentElement.classList.contains('navmin');
+    b.setAttribute('aria-expanded', min ? 'false' : 'true');
+    var t = min ? 'Expand the menu' : 'Collapse the menu';
+    b.setAttribute('aria-label', t);
+    b.setAttribute('title', t);
+  }
+  paint();
+  b.addEventListener('click', function () {
+    var min = document.documentElement.classList.toggle('navmin');
+    // Remembered per browser. It is a preference, not state anyone else needs,
+    // so it does not belong in the database or in a cookie sent on every call.
+    try { localStorage.setItem('gw_nav', min ? 'min' : 'full'); } catch (e) {}
+    paint();
+  });
+})();
+</script>
 <script>
 /* Any submit button carrying data-confirm asks first, in the console's own
    dialog rather than the browser's. The question names the consequence — what

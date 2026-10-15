@@ -160,7 +160,7 @@ const TEST_SCRIPT = `
 (function () {
   var LABELS = {
     supplier: ['Supplier API', 'Calling the third-party API with this endpoint\\u2019s credential'],
-    wrapper:  ['What a vendor receives', 'Running the real projection over that response'],
+    wrapper:  ['What a consumer receives', 'Running the real projection over that response'],
     route:    ['Published route', 'Checking the live URL is mounted and refuses anonymous callers']
   };
   function esc(t) {
@@ -182,7 +182,7 @@ const TEST_SCRIPT = `
     var detail = st && st.detail ? '<div class="d">' + esc(st.detail) + '</div>' : '';
     var err = st && st.error ? '<div class="e">' + esc(st.error) + '</div>' : '';
     var sample = st && st.sample
-      ? '<details class="s"><summary>Show what the vendor would get</summary><pre>'
+      ? '<details class="s"><summary>Show what the consumer would get</summary><pre>'
         + esc(st.sample) + '</pre></details>'
       : '';
     return '<li class="' + cls + '"><span class="m">' + mark + '</span>'
@@ -383,7 +383,7 @@ function endpointDetail({ admin, flash, e, upstream, baseUrl }) {
     <tr><td class="mono">${esc(p.name)}</td>
         <td><span class="badge mute">${esc(p.location)}</span></td>
         <td>${p.source === 'vendor'
-          ? '<span class="t2">the vendor</span>'
+          ? '<span class="t2">the consumer</span>'
           : `<span class="badge warn">${esc(p.source === 'env' ? 'a variable' : 'fixed')}</span>`}</td>
         <td class="t2">${esc(p.data_type)}${p.required ? ' · required' : ''}</td>
         <td class="mono">${esc(p.example || p.fixed_value || '')}</td>
@@ -403,12 +403,12 @@ function endpointDetail({ admin, flash, e, upstream, baseUrl }) {
   const publishButton = e.status === 'live'
     ? `<button type="submit" name="status" value="draft" class="danger"
          data-confirm="Withdraw ${esc(e.display_name || e.name)}?"
-         data-confirm-body="It stops answering within a few seconds. Vendors calling it will get 404 until it is published again.">Withdraw</button>`
+         data-confirm-body="It stops answering within a few seconds. Consumers calling it will get 404 until it is published again.">Withdraw</button>`
     : `<button type="submit" name="status" value="live" class="primary"
          data-confirm="Publish ${esc(e.display_name || e.name)}?"
-         data-confirm-body="It starts answering immediately for any vendor holding the scope ep:${esc(e.name)}. ${
+         data-confirm-body="It starts answering immediately for any consumer holding the scope ep:${esc(e.name)}. ${
            e.response_mode === 'whitelist'
-             ? `Vendors will receive ${exposed.length} field(s) and nothing else.`
+             ? `Consumers will receive ${exposed.length} field(s) and nothing else.`
              : 'This endpoint does NOT filter the supplier response.'}">Publish</button>`;
 
   const body = `
@@ -417,7 +417,7 @@ ${pageHead(e.display_name || e.name, esc(e.description || 'No description.'),
    <a class="btn" href="/admin/catalog/endpoint/${esc(e.name)}/postman">Postman collection</a>
    <a class="btn" href="/admin/studio?endpoint=${esc(e.name)}">Edit in the Studio</a>`)}
 
-${panel('The URL a vendor calls', '', `
+${panel('The URL a consumer calls', '', `
   <div class="fullurl"><span class="m">${esc(e.method)}</span><code>${esc(baseUrl)}${esc(e.path)}</code></div>
   <p class="hint" style="margin:10px 0 0">The host comes from <a href="/admin/settings">Admin config</a>;
     the path is this endpoint's. Parameters written as <code>:name</code> are filled in by the caller.</p>`)}
@@ -428,12 +428,12 @@ ${panel('The URL a vendor calls', '', `
   <div class="stat ${e.response_mode === 'whitelist' && exposed.length === 0 ? 'alert' : ''}">
     <div class="l">Exposed fields</div><div class="n">${fmtNum(exposed.length)}<small> of ${fmtNum(e.fields.length)}</small></div></div>
   <div class="stat"><div class="l">Withheld</div><div class="n">${fmtNum(withheld.length)}</div></div>
-  <div class="stat"><div class="l">Vendors granted</div><div class="n">${fmtNum(e.vendor_count || 0)}</div></div>
+  <div class="stat"><div class="l">Consumers granted</div><div class="n">${fmtNum(e.vendor_count || 0)}</div></div>
 </div>
 
 ${panel('Routing', '', `<dl class="dl">
   ${row('Reference', mono(e.name))}
-  ${row('Vendors call', mono(`${e.method} ${baseUrl}${e.path}`))}
+  ${row('Consumers call', mono(`${e.method} ${baseUrl}${e.path}`))}
   ${row('We forward to', mono(`${e.upstream_method || e.method} ${upstream ? upstream.base_url : ''}${e.upstream_path}`))}
   ${row('Supplier API', `<a href="/admin/catalog/upstream/${esc(e.upstream)}">${esc(upstream ? (upstream.display_name || upstream.name) : e.upstream)}</a>`)}
   ${row('Scope required', mono('ep:' + e.name))}
@@ -453,11 +453,11 @@ ${panel('Routing', '', `<dl class="dl">
 </dl>`)}
 
 ${tablePanel('Request parameters',
-  'A parameter whose value comes from a <strong>fixed value</strong> or <strong>a variable</strong> is one the vendor cannot influence.',
+  'A parameter whose value comes from a <strong>fixed value</strong> or <strong>a variable</strong> is one the consumer cannot influence.',
   '<th>Name</th><th>In</th><th>Value from</th><th>Type</th><th>Example</th><th>Meaning</th>',
   paramRows, String(e.params.length))}
 
-${e.response_mode === 'whitelist' ? tablePanel('Fields the vendor receives',
+${e.response_mode === 'whitelist' ? tablePanel('Fields the consumer receives',
   `The response is built from these ${exposed.length} path(s) and nothing else.`,
   '<th>Field</th><th>Type</th><th>Renamed to</th><th>Meaning</th><th></th>',
   fieldRows(exposed, 'Nothing is exposed — this endpoint would return an empty object.'),
@@ -526,7 +526,7 @@ function upstreamDetail({ admin, flash, u, endpoints: eps, baseUrl }) {
       : '<span class="badge warn">no credential configured</span>';
 
   const body = `
-${pageHead(u.display_name || u.name, esc(u.notes || 'A supplier API. Never visible to a vendor.'),
+${pageHead(u.display_name || u.name, esc(u.notes || 'A supplier API. Never visible to a consumer.'),
   `<a class="btn" href="/admin/catalog/upstreams">← Supplier APIs</a>
    <a class="btn" href="/admin/catalog/upstream/${esc(u.name)}/postman">Postman collection</a>
    <a class="btn" href="/admin/studio">Open the Studio</a>`)}
@@ -555,8 +555,8 @@ ${panel('The supplier', '', `<dl class="dl">
 </dl>`)}
 
 ${tablePanel('Endpoints built on this supplier',
-  'Everything a vendor can reach through it. Click one to see exactly what it exposes.',
-  '<th>Endpoint</th><th>Vendors call</th><th>We forward to</th><th>Category</th><th>Status</th><th>Response</th><th class="num">Exposed</th>',
+  'Everything a consumer can reach through it. Click one to see exactly what it exposes.',
+  '<th>Endpoint</th><th>Consumers call</th><th>We forward to</th><th>Category</th><th>Status</th><th>Response</th><th class="num">Exposed</th>',
   epRows, String(eps.total))}
 ${pager('/admin/catalog/upstream/' + u.name, {}, eps)}
 

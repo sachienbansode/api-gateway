@@ -181,14 +181,14 @@ function build(logger, { flashOf, deps = {} } = {}) {
    */
 
   /**
-   * Test one endpoint: the supplier, then what a vendor would receive.
+   * Test one endpoint: the supplier, then what a consumer would receive.
    *
    * Three stages, and the third is conditional on purpose.
    *
    *   supplier  a real call to the third-party API with this endpoint's own
    *             credential. The thing that is actually most likely to break.
    *   wrapper   the real projection run over that response, so this shows what
-   *             a vendor would get — field for field — not an approximation.
+   *             a consumer would get — field for field — not an approximation.
    *   route     only when the endpoint is LIVE. A draft endpoint is
    *             deliberately not mounted, so calling its public URL would 404
    *             and the failure would mean nothing. For a live one we call the
@@ -197,8 +197,8 @@ function build(logger, { flashOf, deps = {} } = {}) {
    *             is the pair worth knowing. Getting a 200 there would be an
    *             emergency, and it is reported as one.
    *
-   * Deliberately no vendor key is minted. Doing that would mean creating a
-   * vendor row to run a test, and a throwaway vendor in a table people read to
+   * Deliberately no consumer key is minted. Doing that would mean creating a
+   * consumer row to run a test, and a throwaway consumer in a table people read to
    * answer "who can call us" is worse than the small thing it would prove.
    */
   r.post('/endpoint/:name/test', async (req, res) => {
@@ -275,7 +275,7 @@ function build(logger, { flashOf, deps = {} } = {}) {
         error: sup.error || (sup.ok ? null : `The supplier answered ${sup.status}.`),
       });
 
-      // --- 2. what a vendor would receive ----------------------------------
+      // --- 2. what a consumer would receive ----------------------------------
       // Skipped when the supplier call FAILED, not merely when it returned
       // nothing. A 503 usually carries a JSON error body, and projecting that
       // produces an authoritative-looking "0 fields, 1 withheld" that describes
@@ -283,7 +283,7 @@ function build(logger, { flashOf, deps = {} } = {}) {
       // endpoint and reads as though the whitelist were the problem.
       if (!sup.ok || !sup.body) {
         stages.push({
-          key: 'wrapper', label: 'What a vendor receives', ok: null, skipped: true,
+          key: 'wrapper', label: 'What a consumer receives', ok: null, skipped: true,
           detail: sup.ok
             ? 'Not run — the supplier returned no body to build a response from.'
             : 'Not run — fix the supplier call above first. Projecting an error ' +
@@ -306,7 +306,7 @@ function build(logger, { flashOf, deps = {} } = {}) {
         const upstreamFields = tester.discover(sup.body).length;
         stages.push({
           key: 'wrapper',
-          label: 'What a vendor receives',
+          label: 'What a consumer receives',
           ok: proj.ok === true && exposed > 0,
           detail: proj.ok
             ? `${exposed} field(s) of the supplier's ${upstreamFields} — ` +
@@ -314,7 +314,7 @@ function build(logger, { flashOf, deps = {} } = {}) {
             : null,
           sample: proj.ok ? JSON.stringify(proj.result, null, 2).slice(0, 4000) : null,
           error: proj.ok
-            ? (exposed === 0 ? 'The vendor would receive an empty object.' : null)
+            ? (exposed === 0 ? 'The consumer would receive an empty object.' : null)
             : proj.error,
         });
       }
@@ -384,7 +384,7 @@ function build(logger, { flashOf, deps = {} } = {}) {
       if (deps.reloadCatalog) await deps.reloadCatalog().catch(() => {});
       logger?.info?.({ endpoint: name, status, actor: req.admin.email }, 'catalogue: status changed');
       const msg = status === 'live'
-        ? 'Published. It is answering now — vendors still need the ep: scope.'
+        ? 'Published. It is answering now — consumers still need the ep: scope.'
         : 'Withdrawn. It stopped answering within a few seconds.';
       res.redirect(303, `${back}?ok=${encodeURIComponent(msg)}`);
     } catch (err) {
