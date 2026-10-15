@@ -103,6 +103,24 @@ const STUDIO_CSS = `
   border-radius:var(--r-lg);padding:11px 15px;display:flex;align-items:center;gap:11px;
   flex-wrap:wrap;margin-top:4px;box-shadow:0 -2px 8px rgba(0,0,0,.04);z-index:5}
 .sticky-save .msg{font-size:11.5px;color:var(--ink3);flex:1;min-width:140px}
+/* ---------- in-app dialog ---------- */
+.ovl{position:fixed;inset:0;background:rgba(26,24,22,.42);display:flex;align-items:center;
+  justify-content:center;z-index:100;padding:20px;backdrop-filter:blur(1px)}
+.ovl[hidden]{display:none}
+.dlg{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-lg);
+  width:100%;max-width:430px;overflow:hidden;box-shadow:0 12px 40px rgba(0,0,0,.18)}
+.dlg .dh{padding:13px 17px;border-bottom:1px solid var(--border);background:var(--surface2)}
+.dlg .dh h3{margin:0;font-size:13px;font-weight:600;color:var(--ink)}
+.dlg .db{padding:16px 17px}
+.dlg .db p{margin:0 0 12px;font-size:12.5px;color:var(--ink2);line-height:1.55}
+.dlg .db p:last-child{margin-bottom:0}
+.dlg input{width:100%;border:1px solid var(--border);border-radius:var(--r);padding:8px 11px;
+  font:inherit;font-size:12.5px;color:var(--ink);background:var(--surface2);outline:none}
+.dlg input:focus{border-color:var(--blue)}
+.dlg .df{padding:12px 17px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;
+  gap:8px;background:var(--surface2)}
+.dlg .note{font-size:11px;color:var(--ink3);margin-top:9px;line-height:1.45}
+
 code.path{font-family:var(--mono);font-size:11.5px;background:var(--surface2);border:1px solid var(--border);
   border-radius:4px;padding:1px 6px}
 `;
@@ -374,6 +392,21 @@ function render({ admin, bootstrap, flash }) {
       <button type="button" class="danger hidden" id="btnWithdraw">Withdraw</button>
       <span class="msg" id="saveMsg">A draft is never routed. Publishing is the moment it
         starts answering.</span>
+    </div>
+  </div>
+</div>
+
+<div class="ovl" id="dlgOverlay" hidden>
+  <div class="dlg" role="dialog" aria-modal="true" aria-labelledby="dlgTitle">
+    <div class="dh"><h3 id="dlgTitle"></h3></div>
+    <div class="db">
+      <p id="dlgBody"></p>
+      <input id="dlgInput" class="hidden" autocomplete="off">
+      <p class="note hidden" id="dlgNote"></p>
+    </div>
+    <div class="df">
+      <button type="button" id="dlgCancel">Cancel</button>
+      <button type="button" class="primary" id="dlgOk">OK</button>
     </div>
   </div>
 </div>

@@ -72,6 +72,62 @@
   function badge(kind, text) { return el('span', { class: 'badge ' + kind, text: text }); }
   function show(node, on) { node.classList[on ? 'remove' : 'add']('hidden'); }
 
+  /**
+   * In-app dialog, used for everything the browser would otherwise handle.
+   *
+   * window.prompt and window.confirm are the browser's, not ours: they cannot
+   * be styled, cannot explain themselves properly, are suppressed outright in
+   * some setups, and look like something has gone wrong with the page. This is
+   * the same mechanism for asking a question, confirming a destructive act, or
+   * telling someone something — in the console's own type and colours.
+   *
+   * Returns a promise: the typed string, true, or null when dismissed.
+   */
+  function dialog(opts) {
+    var ovl = $('dlgOverlay');
+    var input = $('dlgInput');
+    var note = $('dlgNote');
+    $('dlgTitle').textContent = opts.title || '';
+    $('dlgBody').textContent = opts.body || '';
+    $('dlgOk').textContent = opts.ok || 'OK';
+    $('dlgCancel').textContent = opts.cancel || 'Cancel';
+    show($('dlgCancel'), opts.cancel !== false);
+    $('dlgOk').className = opts.danger ? 'danger' : 'primary';
+
+    var wantsInput = opts.input === true;
+    show(input, wantsInput);
+    input.value = opts.value || '';
+    input.placeholder = opts.placeholder || '';
+    show(note, !!opts.note);
+    note.textContent = opts.note || '';
+
+    ovl.hidden = false;
+    if (wantsInput) input.focus(); else $('dlgOk').focus();
+
+    return new Promise(function (resolve) {
+      function done(value) {
+        ovl.hidden = true;
+        $('dlgOk').removeEventListener('click', onOk);
+        $('dlgCancel').removeEventListener('click', onCancel);
+        document.removeEventListener('keydown', onKey);
+        ovl.removeEventListener('mousedown', onBackdrop);
+        resolve(value);
+      }
+      function onOk() { done(wantsInput ? input.value : true); }
+      function onCancel() { done(null); }
+      function onKey(e) {
+        if (e.key === 'Escape') { e.preventDefault(); done(null); }
+        if (e.key === 'Enter' && wantsInput) { e.preventDefault(); onOk(); }
+      }
+      // Clicking the backdrop dismisses, clicking the card does not.
+      function onBackdrop(e) { if (e.target === ovl) done(null); }
+      $('dlgOk').addEventListener('click', onOk);
+      $('dlgCancel').addEventListener('click', onCancel);
+      document.addEventListener('keydown', onKey);
+      ovl.addEventListener('mousedown', onBackdrop);
+    });
+  }
+
   function api(path, body, method) {
     return fetch(path, {
       method: method || (body ? 'POST' : 'GET'),
@@ -158,12 +214,23 @@
     renderDropdowns();
   });
   $('epSel').addEventListener('change', function () {
-    if (!this.value) { loadEndpoint(null); return; }
-    api('/admin/api/endpoint/' + encodeURIComponent(this.value)).then(function (j) {
-      loadEndpoint(j.endpoint);
-    }).catch(flashErr);
+    var want = this.value;
+    var previous = S.endpointName;
+    // Put the picker back until the guard has been answered, so the dropdown
+    // never shows an endpoint the form is not actually displaying.
+    this.value = previous;
+    var sel = this;
+    guard(function () {
+      sel.value = want;
+      if (!want) { loadEndpoint(null); return; }
+      api('/admin/api/endpoint/' + encodeURIComponent(want)).then(function (j) {
+        loadEndpoint(j.endpoint);
+      }).catch(flashErr);
+    });
   });
-  $('newEndpoint').addEventListener('click', function () { loadEndpoint(null); });
+  $('newEndpoint').addEventListener('click', function () {
+    guard(function () { loadEndpoint(null); });
+  });
 
   // ---------------------------------------------------------------------
   // Step 1 — supplier
@@ -222,14 +289,21 @@
     var btn = this;
     var name = slug($('upName').value);
     if (!name) { msg('revealNote', 'Save the supplier API first.', true); return; }
-    var reason = window.prompt(
-      'This will be recorded against your name in the credential access log.\n\n' +
-      'What do you need it for?', '');
-    if (reason === null) return;
-    busy(btn, true, 'Reading…');
-    api('/admin/api/upstream/' + encodeURIComponent(name) + '/credential/reveal',
-        { reason: reason, slot: 'value' })
-      .then(function (j) {
+    dialog({
+      title: 'Show the stored credential',
+      body: 'This is recorded against your name in the credential access log, ' +
+            'with whatever you write here.',
+      input: true,
+      placeholder: 'What do you need it for?',
+      note: 'The value is cleared from the screen after a minute.',
+      ok: 'Show it'
+    }).then(function (reason) {
+      if (reason === null) return null;
+      busy(btn, true, 'Reading…');
+      return api('/admin/api/upstream/' + encodeURIComponent(name) + '/credential/reveal',
+                 { reason: reason, slot: 'value' });
+    }).then(function (j) {
+        if (!j) return;
         var box = $('revealBox');
         box.textContent = j.value;
         show(box, true);
@@ -422,7 +496,16 @@
   // ---------------------------------------------------------------------
   // Step 3 — transformation
   // ---------------------------------------------------------------------
-  function setMode(m) {
+  /**
+   * @param {boolean} byUser  true when someone clicked a mode; false when we
+   *   are just rendering a loaded endpoint.
+   *
+   * The distinction matters: loadEndpoint() marks the form clean and then
+   * renders it, and rendering must not mark it dirty again. It did, which made
+   * every freshly loaded endpoint look like it had unsaved changes — and was
+   * why leaving the page asked you to confirm when you had typed nothing.
+   */
+  function setMode(m, byUser) {
     S.mode = m;
     Array.prototype.forEach.call(document.querySelectorAll('.mode'), function (n) {
       n.classList.toggle('on', n.getAttribute('data-mode') === m);
@@ -441,10 +524,10 @@
       show(warn, true);
     } else show(warn, false);
     renderFields();
-    S.dirty = true;
+    if (byUser) S.dirty = true;
   }
   Array.prototype.forEach.call(document.querySelectorAll('.mode'), function (n) {
-    n.addEventListener('click', function () { setMode(n.getAttribute('data-mode')); });
+    n.addEventListener('click', function () { setMode(n.getAttribute('data-mode'), true); });
   });
 
   // --- request parameters ---
@@ -775,9 +858,70 @@
       .then(function () { busy(btn, false); });
   });
 
-  window.addEventListener('beforeunload', function (e) {
-    if (S.dirty) { e.preventDefault(); e.returnValue = ''; }
+  /**
+   * Unsaved-work guard.
+   *
+   * The browser's "Leave site?" box is gone — it cannot say what is unsaved or
+   * offer to save it, and it appears in a style that belongs to nothing. In
+   * its place: anything in this console that would discard the form asks
+   * first, in our own dialog, with the option to save on the way out.
+   *
+   * A hard reload or a typed URL still leaves without asking. That is the
+   * trade for not using the browser's box, and it is the right way round: the
+   * paths people actually take are covered, and the one that is not is the one
+   * someone takes deliberately.
+   */
+  function guard(action) {
+    if (!S.dirty) return action();
+    dialog({
+      title: 'This endpoint has unsaved changes',
+      body: 'Save it as a draft before leaving? A draft is never routed, so saving ' +
+            'costs nothing.',
+      ok: 'Save and continue',
+      cancel: 'Discard and continue'
+    }).then(function (answer) {
+      if (answer === null) { S.dirty = false; action(); return; }   // discard
+      Promise.resolve().then(save).then(function () {
+        msg('saveMsg', 'Saved as a draft.', false);
+        action();
+      }).catch(function (e) { msg('saveMsg', e.message, true); });
+    });
+  }
+
+  /**
+   * Any edit inside steps 2 and 3 marks the form unsaved.
+   *
+   * Previously only a handful of fields did, so the guard could not fire for
+   * the rest — you could retype a path, leave, and lose it silently. One
+   * delegated listener covers every control in those panels, including ones
+   * added later, which is the point: a new field should not have to remember
+   * to opt in.
+   *
+   * Step 1 is excluded: it has its own Save button and its own object, and
+   * typing a supplier's base URL is not an unsaved change to THIS endpoint.
+   */
+  ['step2', 'step3'].forEach(function (id) {
+    var panel = $(id);
+    if (!panel) return;
+    ['input', 'change'].forEach(function (evt) {
+      panel.addEventListener(evt, function (e) {
+        var t = e.target;
+        if (!t || !t.tagName) return;
+        if (['INPUT', 'SELECT', 'TEXTAREA'].indexOf(t.tagName) === -1) return;
+        S.dirty = true;
+      });
+    });
   });
+
+  // Every link out of the Studio goes through the guard.
+  Array.prototype.forEach.call(document.querySelectorAll('aside nav a, .pg-actions a'),
+    function (a) {
+      a.addEventListener('click', function (e) {
+        if (!S.dirty) return;
+        e.preventDefault();
+        guard(function () { window.location.href = a.getAttribute('href'); });
+      });
+    });
 
   // ---------------------------------------------------------------------
   // Loading an endpoint into the four steps
@@ -802,10 +946,13 @@
     renderBar();
     renderUpstream();
     renderEndpoint();
-    setMode(S.mode);
+    setMode(S.mode, false);
     renderParams();
     renderFields();
     renderTestParams();
+    // Last word, after every render: what is on screen is exactly what was
+    // loaded, so there is nothing to save.
+    S.dirty = false;
     $('step1').classList.toggle('ok', !!(S.upstream && S.upstream.last_test_status &&
       S.upstream.last_test_status < 400));
     $('step2').classList.toggle('ok', !!(e && e.path));
