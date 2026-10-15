@@ -302,7 +302,7 @@ printf '    https://%s/healthz       -> ' "$DOMAIN"
 curl -fsS -k --resolve "$DOMAIN:443:127.0.0.1" -o /dev/null -w '%{http_code} (via loopback)\n' \
   "https://$DOMAIN/healthz" || echo "FAILED — check: pm2 logs api-gateway"
 printf '    https://%s/admin/login   -> ' "$DOMAIN"; curl -fsS -o /dev/null -w '%{http_code}\n' "https://$DOMAIN/admin/login" || echo FAILED
-printf '    http is refused              : '; curl -s -o /dev/null -w '%{http_code} (403 = plain HTTP blocked, as intended)\n' "http://$DOMAIN/admin/login"
+printf '    http -> https redirect       : '; curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' "http://$DOMAIN/admin/login"
 printf '    acme path still open on 80   : '; curl -s -o /dev/null -w '%{http_code} (404 = reachable, nothing to serve)\n' "http://$DOMAIN/.well-known/acme-challenge/none"
 printf '    certificate expires          : '; openssl x509 -enddate -noout -in "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" | cut -d= -f2
 printf '    other sites on port 80       : '; check_others
