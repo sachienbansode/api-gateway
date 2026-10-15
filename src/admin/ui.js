@@ -265,6 +265,32 @@ function svg(name) {
     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON[name]}</svg>`;
 }
 
+/**
+ * The product name, held here rather than passed through every page.
+ *
+ * layout() is called by a dozen page functions, each with its own signature,
+ * and the name is needed by all of them. Threading an extra argument through
+ * every one of those call sites to deliver a value that is the same on every
+ * page would be a lot of churn for no clarity.
+ *
+ * So the admin router refreshes this once per request, from a repo that
+ * caches for fifteen seconds. The cost is one piece of module state; the
+ * failure mode is a stale name for a few seconds after an administrator
+ * renames the product, which is not a failure mode anyone will notice.
+ */
+let BRAND = {
+  name: process.env.ADMIN_TITLE || process.env.API_TITLE || 'Ashika - Pravah',
+  tagline: process.env.ADMIN_TAGLINE || 'API Gateway',
+};
+
+function setBrand(b) {
+  if (b && b.name) BRAND = { name: b.name, tagline: b.tagline || '' };
+}
+
+function currentBrand() {
+  return BRAND;
+}
+
 function layout({ title, admin, current, body, flash }) {
   const nav = TABS.map(
     ([href, label, icon, tag]) =>
@@ -281,8 +307,10 @@ function layout({ title, admin, current, body, flash }) {
     : `<div class="flash err">Read-only access. Changing anything needs the
        <strong>${esc(process.env.GATEWAY_PAGE_KEY || 'api-gateway')}:edit</strong> grant.</div>`;
 
-  const full = process.env.ADMIN_TITLE || process.env.API_TITLE || 'Pravah API Gateway';
-  const brand = esc(full.replace(/\s*API\s*Gateway\s*$/i, '').trim() || full);
+  const b = currentBrand();
+  const brand = esc(b.name);
+  const tagline = esc(b.tagline);
+  const full = b.tagline ? `${b.name} ${b.tagline}` : b.name;
 
   return `<!doctype html>
 <html lang="en"><head>
@@ -300,7 +328,7 @@ function layout({ title, admin, current, body, flash }) {
   <aside><div class="inner">
     <div class="logo">
       <img src="/admin/logo.png" alt="" width="34" height="34">
-      <div class="t"><b>${brand}</b><span>API Gateway</span></div>
+      <div class="t"><b>${brand}</b><span>${tagline}</span></div>
     </div>
     <div class="navsec">Gateway</div>
     <nav>${nav}</nav>
@@ -398,4 +426,7 @@ const fmtDate = (d) => {
 };
 const fmtNum = (n) => (n === null || n === undefined ? '—' : Number(n).toLocaleString('en-IN'));
 
-module.exports = { esc, layout, pageHead, panel, tablePanel, fmtDate, fmtNum };
+module.exports = {
+  esc, layout, pageHead, panel, tablePanel, fmtDate, fmtNum,
+  setBrand, currentBrand,
+};

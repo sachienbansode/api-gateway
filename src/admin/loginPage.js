@@ -21,11 +21,14 @@ function esc(s) {
   );
 }
 
-function render({ error = '', title = 'API Gateway', email = '' } = {}) {
-  // "Pravah API Gateway" → brand "Pravah", kicker "API Gateway", matching the
-  // console sidebar so the two screens read as one product.
-  const brand = title.replace(/\s*API\s*Gateway\s*$/i, '').trim() || title;
-  const kicker = brand === title ? '' : 'API Gateway';
+function render({ error = '', title = '', email = '', brand: b = null } = {}) {
+  // Name and tagline arrive as two values, from the settings an administrator
+  // owns. They used to be one string that this function split by stripping a
+  // trailing "API Gateway" — which produced the right answer only for names
+  // ending that way, and quietly mangled every other one.
+  const brand = (b && b.name) || title || 'Ashika - Pravah';
+  const kicker = b ? b.tagline || '' : 'API Gateway';
+  const full = kicker ? `${brand} ${kicker}` : brand;
 
   return `<!doctype html>
 <html lang="en" data-theme="auto">
@@ -33,7 +36,7 @@ function render({ error = '', title = 'API Gateway', email = '' } = {}) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
-<title>Sign in · ${esc(title)}</title>
+<title>Sign in · ${esc(full)}</title>
 <link rel="icon" href="/admin/favicon.ico" sizes="any">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">

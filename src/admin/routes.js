@@ -8,6 +8,8 @@ const session = require('./session');
 const attempts = require('./loginAttempts');
 const loginPage = require('./loginPage');
 const otpPage = require('./otpPage');
+const ui = require('./ui');
+const settings = require('../db/repos/settings');
 const otp = require('./otp');
 const pages = require('./pages');
 const {
@@ -108,6 +110,26 @@ function buildAdminRouter(logger, deps = {}) {
     next();
   });
 
+  // The product's name, refreshed once per request from the settings an
+  // administrator owns. Cached for fifteen seconds in the repo, so this is a
+  // query every fifteen seconds rather than one per page.
+  //
+  // Set on `ui` as well as on the request because layout() is called by a
+  // dozen page functions with a dozen signatures, and threading the name
+  // through all of them to deliver the same value everywhere would be churn
+  // without clarity. See the note next to setBrand().
+  router.use(async (req, _res, next) => {
+    try {
+      req.brand = await settings.brand();
+      ui.setBrand(req.brand);
+    } catch {
+      // Never block a page, least of all the login page, because a name
+      // could not be read. The env fallback already holds a usable value.
+      req.brand = ui.currentBrand();
+    }
+    next();
+  });
+
   // Before the session check on purpose: the login page shows the mark, and a
   // logo behind authentication means a broken image on the one screen every
   // person sees first.
@@ -121,7 +143,7 @@ function buildAdminRouter(logger, deps = {}) {
   // GET /admin/login
   // -------------------------------------------------------------------------
   router.get('/login', (req, res) => {
-    res.type('html').send(loginPage.render({ title }));
+    res.type('html').send(loginPage.render({ title, brand: req.brand }));
   });
 
   // -------------------------------------------------------------------------
@@ -136,7 +158,7 @@ function buildAdminRouter(logger, deps = {}) {
     const fail = (reason, status = 401, message = GENERIC) => {
       attempts.recordFailure(keys);
       logger?.warn({ ip, email, reason, requestId: req.id }, 'admin sign-in failed');
-      res.status(status).type('html').send(loginPage.render({ title, error: message, email }));
+      res.status(status).type('html').send(loginPage.render({ title, brand: req.brand, error: message, email }));
     };
 
     if (!email || !password) {
@@ -243,7 +265,7 @@ function buildAdminRouter(logger, deps = {}) {
           );
           return res.status(503).type('html').send(
             loginPage.render({
-              title, email,
+              title, brand: req.brand, email,
               error:
                 'Your role needs a second factor, but the code could not be emailed. ' +
                 'Tell your administrator — the platform mail settings need attention.',
@@ -285,7 +307,7 @@ function buildAdminRouter(logger, deps = {}) {
     const pending = otp.readPending(req);
     if (!pending) return res.redirect(303, '/admin/login');
     res.type('html').send(
-      otpPage.render({ title, email: pending.email, minutes: Math.round(otp.CODE_TTL_MS / 60000) })
+      otpPage.render({ title, brand: req.brand, email: pending.email, minutes: Math.round(otp.CODE_TTL_MS / 60000) })
     );
   });
 
@@ -307,7 +329,8 @@ function buildAdminRouter(logger, deps = {}) {
       res.set('Retry-After', String(limit.retryAfter));
       return res.status(429).type('html').send(
         otpPage.render({
-          title, email: pending.email, minutes: Math.round(otp.CODE_TTL_MS / 60000),
+          title, brand: req.brand, email: pending.email,
+          minutes: Math.round(otp.CODE_TTL_MS / 60000),
           error: `Too many attempts. Try again in ${Math.ceil(limit.retryAfter / 60)} minute(s).`,
         })
       );
@@ -326,12 +349,12 @@ function buildAdminRouter(logger, deps = {}) {
         if (result.reason !== 'wrong code') {
           otp.clearPendingCookie(res, session.isSecure(req));
           return res.status(401).type('html').send(
-            loginPage.render({ title, email: pending.email, error: result.message })
+            loginPage.render({ title, brand: req.brand, email: pending.email, error: result.message })
           );
         }
         return res.status(401).type('html').send(
           otpPage.render({
-            title, email: pending.email,
+            title, brand: req.brand, email: pending.email,
             minutes: Math.round(otp.CODE_TTL_MS / 60000), error: result.message,
           })
         );
@@ -347,7 +370,8 @@ function buildAdminRouter(logger, deps = {}) {
       logger?.error({ err: err.message, ip, requestId: req.id }, 'admin second factor error');
       return res.status(503).type('html').send(
         otpPage.render({
-          title, email: pending.email, minutes: Math.round(otp.CODE_TTL_MS / 60000),
+          title, brand: req.brand, email: pending.email,
+          minutes: Math.round(otp.CODE_TTL_MS / 60000),
           error: 'Sign-in is temporarily unavailable. Try again shortly.',
         })
       );

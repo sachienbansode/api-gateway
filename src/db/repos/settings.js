@@ -25,6 +25,8 @@ const FALLBACK = {
   public_base_url: () => process.env.PUBLIC_BASE_URL || '',
   docs_contact: () => process.env.DOCS_CONTACT || '',
   vendor_key_header: () => process.env.API_KEY_HEADER || 'X-API-Key',
+  brand_name: () => process.env.ADMIN_TITLE || process.env.API_TITLE || 'Ashika - Pravah',
+  brand_tagline: () => process.env.ADMIN_TAGLINE || 'API Gateway',
 };
 
 let cache = null;
@@ -77,6 +79,23 @@ async function baseUrl() {
   return String(await get('public_base_url')).replace(/\/+$/, '');
 }
 
+/**
+ * The product's name and tagline, for every screen that renders a header.
+ *
+ * Returned as two fields rather than one string. The old code kept one title
+ * and recovered the name by stripping a trailing "API Gateway" with a regex,
+ * which worked only for names that happened to end that way and silently
+ * mangled the rest.
+ */
+async function brand() {
+  const s = await all();
+  const pick = (k) => {
+    const v = s[k] && s[k].effective;
+    return v && String(v).trim() ? String(v).trim() : FALLBACK[k]();
+  };
+  return { name: pick('brand_name'), tagline: pick('brand_tagline') };
+}
+
 async function set(key, value, actor) {
   const before = await db.query(`SELECT value FROM gateway.settings WHERE key = $1`, [key]);
   if (!before?.rows?.length) throw new Error(`"${key}" is not a known setting`);
@@ -107,4 +126,4 @@ async function history(limit = 20) {
 /** Drop the cache — for tests, and after a bulk change. */
 function invalidate() { cache = null; }
 
-module.exports = { all, get, set, baseUrl, history, invalidate };
+module.exports = { all, get, set, baseUrl, brand, history, invalidate };

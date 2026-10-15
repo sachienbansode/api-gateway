@@ -12,9 +12,10 @@ const { esc } = require('./loginPage');
  *
  * `error` and `email` are the only interpolated values and both are escaped.
  */
-function render({ error = '', title = 'API Gateway', email = '', minutes = 10 } = {}) {
-  const brand = title.replace(/\s*API\s*Gateway\s*$/i, '').trim() || title;
-  const kicker = brand === title ? '' : 'API Gateway';
+function render({ error = '', title = '', email = '', minutes = 10, brand: b = null } = {}) {
+  const brand = (b && b.name) || title || 'Ashika - Pravah';
+  const kicker = b ? b.tagline || '' : 'API Gateway';
+  const full = kicker ? `${brand} ${kicker}` : brand;
 
   return `<!doctype html>
 <html lang="en" data-theme="auto">
@@ -22,7 +23,7 @@ function render({ error = '', title = 'API Gateway', email = '', minutes = 10 } 
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
-<title>Enter your code · ${esc(title)}</title>
+<title>Enter your code · ${esc(full)}</title>
 <link rel="icon" href="/admin/favicon.ico" sizes="any">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
