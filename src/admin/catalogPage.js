@@ -46,6 +46,50 @@ tr.row{cursor:pointer}
   border-radius:3px;padding:3px 7px}
 .fullurl code{font-family:var(--mono);font-size:12.5px;color:var(--ink);word-break:break-all}
 .sum{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-bottom:16px}
+
+/* The table has to FIT. Fixed layout with explicit widths, because the browser's
+   automatic algorithm was sizing to the longest URL and pushing Actions past the
+   right edge — which reads as a broken page, not as a scrollable one. */
+table.cat{table-layout:fixed;width:100%}
+table.cat th:nth-child(1),table.cat td:nth-child(1){width:18%}
+table.cat th:nth-child(2),table.cat td:nth-child(2){width:8%}
+table.cat th:nth-child(3),table.cat td:nth-child(3){width:23%}
+table.cat th:nth-child(4),table.cat td:nth-child(4){width:7%}
+table.cat th:nth-child(5),table.cat td:nth-child(5){width:9%}
+table.cat th:nth-child(6),table.cat td:nth-child(6){width:7%}
+table.cat th:nth-child(7),table.cat td:nth-child(7){width:6%}
+/* The remaining 22%. Four controls with nowrap need a stated share, or the
+   fixed layout gives them what is left and they spill past the edge. */
+table.cat th:nth-child(8),table.cat td:nth-child(8){width:22%}
+table.cat td .path{word-break:break-all}
+table.cat td.actions{white-space:nowrap;text-align:right}
+table.cat td.actions .btn{padding:3px 7px;font-size:11px;margin-left:3px}
+.baseline{margin:0;padding:10px 15px;border-bottom:1px solid var(--border);
+  background:var(--surface2);font-size:11.5px;color:var(--ink3)}
+.baseline code{font-family:var(--mono);font-size:11.5px;color:var(--ink2)}
+
+/* Test results, inline under the row they belong to. */
+tr.testrow td{background:var(--surface2);padding:0}
+ul.stages{list-style:none;margin:0;padding:11px 15px}
+ul.stages li{display:flex;gap:10px;align-items:flex-start;padding:8px 0;
+  border-bottom:1px solid var(--border);font-size:12.5px}
+ul.stages li:last-child{border-bottom:0}
+ul.stages li .m{flex:none;width:16px;text-align:center;font-weight:700;line-height:1.5}
+ul.stages li.pass .m{color:var(--green)}
+ul.stages li.fail .m{color:var(--red)}
+ul.stages li.skip .m{color:var(--ink3)}
+ul.stages li b{font-weight:600}
+ul.stages .mt{font-size:11px;color:var(--ink3)}
+ul.stages .h{font-size:11.5px;color:var(--ink3)}
+ul.stages .d{font-family:var(--mono);font-size:11px;color:var(--ink2);word-break:break-all;margin-top:3px}
+ul.stages .e{font-size:12px;color:var(--red);margin-top:4px;line-height:1.5}
+ul.stages .s{margin-top:6px}
+ul.stages .s summary{font-size:11.5px;color:var(--ink2);cursor:pointer}
+ul.stages .s pre{max-height:230px;overflow:auto;font-size:11px;margin:6px 0 0}
+ul.stages .sp{display:inline-block;width:11px;height:11px;margin-top:3px;
+  border:2px solid var(--border2);border-top-color:var(--ink);border-radius:50%;
+  animation:sp .6s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
 `;
 
 const qs = (params) => {
@@ -99,16 +143,109 @@ function select(name, label, options, value, allLabel) {
     <select id="f_${name}" name="${name}">${opts.join('')}</select></div>`;
 }
 
+
+/**
+ * The per-row Test.
+ *
+ * Progress is shown as three named stages that go pending -> running -> result,
+ * because "it is thinking" tells somebody nothing when a supplier takes eleven
+ * seconds to answer. The stages are rendered immediately with the first marked
+ * running, so the screen says what is being waited on.
+ *
+ * One request serves all three. Splitting it would mean calling the supplier
+ * twice to show two stages, which is a real call to a real third party for a
+ * progress animation.
+ */
+const TEST_SCRIPT = `
+(function () {
+  var LABELS = {
+    supplier: ['Supplier API', 'Calling the third-party API with this endpoint\\u2019s credential'],
+    wrapper:  ['What a vendor receives', 'Running the real projection over that response'],
+    route:    ['Published route', 'Checking the live URL is mounted and refuses anonymous callers']
+  };
+  function esc(t) {
+    return String(t == null ? '' : t).replace(/[&<>"]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+    });
+  }
+  function stageHtml(key, st) {
+    var L = LABELS[key] || [key, ''];
+    var mark, cls;
+    if (!st) { mark = '<span class="sp"></span>'; cls = 'run'; }
+    else if (st.skipped || st.ok === null) { mark = '\\u2014'; cls = 'skip'; }
+    else if (st.ok) { mark = '\\u2713'; cls = 'pass'; }
+    else { mark = '\\u2717'; cls = 'fail'; }
+    var meta = [];
+    if (st && st.status) meta.push('HTTP ' + st.status);
+    if (st && st.ms) meta.push(st.ms + ' ms');
+    if (st && st.fields) meta.push(st.fields + ' fields');
+    var detail = st && st.detail ? '<div class="d">' + esc(st.detail) + '</div>' : '';
+    var err = st && st.error ? '<div class="e">' + esc(st.error) + '</div>' : '';
+    var sample = st && st.sample
+      ? '<details class="s"><summary>Show what the vendor would get</summary><pre>'
+        + esc(st.sample) + '</pre></details>'
+      : '';
+    return '<li class="' + cls + '"><span class="m">' + mark + '</span>'
+      + '<div><b>' + esc(L[0]) + '</b>'
+      + (meta.length ? ' <span class="mt">' + esc(meta.join(' \\u00b7 ')) + '</span>' : '')
+      + '<div class="h">' + esc(st ? '' : L[1]) + '</div>'
+      + detail + err + sample + '</div></li>';
+  }
+  function render(cell, stages, order) {
+    var byKey = {};
+    (stages || []).forEach(function (s) { byKey[s.key] = s; });
+    cell.innerHTML = '<ul class="stages">'
+      + order.map(function (k) { return stageHtml(k, byKey[k]); }).join('')
+      + '</ul>';
+  }
+  document.querySelectorAll('button[data-test]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var name = btn.getAttribute('data-test');
+      var row = document.getElementById('t_' + name);
+      var cell = row.querySelector('td');
+      var order = ['supplier', 'wrapper', 'route'];
+      row.classList.remove('hidden');
+      btn.disabled = true;
+      var was = btn.textContent;
+      btn.textContent = 'Testing\\u2026';
+      render(cell, [], order);
+      fetch('/admin/catalog/endpoint/' + encodeURIComponent(name) + '/test', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'content-type': 'application/json', 'x-requested-with': 'catalog' }
+      }).then(function (r) { return r.json(); }).then(function (j) {
+        if (j.error && !(j.stages || []).length) {
+          cell.innerHTML = '<ul class="stages"><li class="fail"><span class="m">\\u2717</span>'
+            + '<div><b>Test could not run</b><div class="e">' + esc(j.error) + '</div></div></li></ul>';
+          return;
+        }
+        render(cell, j.stages, order);
+      }).catch(function (e) {
+        cell.innerHTML = '<ul class="stages"><li class="fail"><span class="m">\\u2717</span>'
+          + '<div><b>Test could not run</b><div class="e">' + esc(e.message) + '</div></div></li></ul>';
+      }).then(function () {
+        btn.disabled = false;
+        btn.textContent = was;
+      });
+    });
+  });
+})();
+`;
+
 // ---------------------------------------------------------------------------
 // List: endpoints
 // ---------------------------------------------------------------------------
 function endpointList({ admin, flash, page: p, facets, query, baseUrl }) {
+  // The base URL is identical on every row, so repeating it sixty-eight times
+  // is pure width — and width is what was pushing the Actions column off the
+  // right edge. Stated once above the table instead; the row shows the path,
+  // which is the part that differs.
   const rows = p.rows.map((e) => `
-    <tr>
+    <tr id="r_${esc(e.name)}">
       <td><div class="t1">${esc(e.display_name || e.name)}</div>
           <div class="t2 mono">${esc(e.name)}</div></td>
-      <td>${esc(e.application || '—')}</td>
-      <td><div class="mono"><span class="t2">${esc(baseUrl)}</span>${esc(e.path)}</div>
+      <td class="t2">${esc(e.application || '—')}</td>
+      <td><div class="mono path">${esc(e.path)}</div>
           <div class="t2">${esc(e.method)} · ${esc(e.category_label || e.category || 'uncategorised')}</div></td>
       <td>${statusBadge(e.status)}</td>
       <td>${modeBadge(e.response_mode)}</td>
@@ -119,10 +256,13 @@ function endpointList({ admin, flash, page: p, facets, query, baseUrl }) {
       <td class="actions">
         <a class="btn" href="/admin/catalog/endpoint/${esc(e.name)}">View</a>
         <a class="btn" href="/admin/studio?endpoint=${esc(e.name)}">Edit</a>
+        <button type="button" class="btn test" data-test="${esc(e.name)}">Test</button>
         <a class="btn" href="/admin/catalog/endpoint/${esc(e.name)}/postman"
-           title="Download a Postman collection for this endpoint">Postman</a>
+           title="Download a Postman collection for this endpoint">&#8595;</a>
       </td>
-    </tr>`).join('') || `<tr><td colspan="8" class="empty">
+    </tr>
+    <tr class="testrow hidden" id="t_${esc(e.name)}"><td colspan="8"></td></tr>`).join('')
+    || `<tr><td colspan="8" class="empty">
       Nothing matches. ${query.q || query.category || query.status || query.mode
         ? 'Try clearing a filter.' : 'Load a catalogue, or build an endpoint in the Studio.'}</td></tr>`;
 
@@ -146,16 +286,20 @@ ${pageHead('Catalogue', 'Every endpoint and supplier API, as the gateway has the
     <a class="btn" href="/admin/catalog">Clear</a></div>
 </form>
 <section class="panel">
-  <div class="wrap"><table>
+  <p class="baseline">Every path below is under
+    <code>${esc(baseUrl || 'the public base URL')}</code>${baseUrl ? '' :
+      ' — <a href="/admin/settings">set one in Admin config</a>'}.</p>
+  <div class="wrap"><table class="cat">
     <thead><tr>
-      <th>Endpoint</th><th>Application</th><th>Vendors call</th><th>Status</th><th>Response</th>
+      <th>Endpoint</th><th>Application</th><th>Path</th><th>Status</th><th>Response</th>
       <th class="num">Exposed</th><th class="num">Params</th><th class="actions">Actions</th>
     </tr></thead>
     <tbody>${rows}</tbody>
   </table></div>
   ${pager('/admin/catalog', query, p)}
 </section>
-<style>${CSS}</style>`;
+<style>${CSS}</style>
+<script>${TEST_SCRIPT}</script>`;
   return layout({ title: 'Catalogue', admin, current: '/admin/catalog', body, flash });
 }
 
