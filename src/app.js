@@ -103,7 +103,12 @@ function createApp({ logger, config } = {}) {
   // through to the vendor router, is refused as an unauthenticated call, and
   // writes an audit row — so the audit log fills with 401s that have nothing
   // to do with any vendor, burying the traffic you actually care about.
-  app.get('/favicon.ico', (req, res) => res.status(204).end());
+  // Served here, above the vendor auth middleware, because a browser asks for
+  // it before anyone has signed in and a 401 would show a broken tab icon.
+  const adminAssets = require('./admin/assets');
+  app.get('/favicon.ico', adminAssets.serve('favicon.ico'));
+  app.get('/apple-touch-icon.png', adminAssets.serve('apple-touch-icon.png'));
+  app.get('/apple-touch-icon-precomposed.png', adminAssets.serve('apple-touch-icon.png'));
 
   app.get('/healthz', (req, res) => res.json({ ok: true }));
 

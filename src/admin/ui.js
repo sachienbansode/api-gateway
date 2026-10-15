@@ -54,11 +54,20 @@ a:hover{text-decoration:underline}
 
 /* ---------- shell ---------- */
 .shell{display:grid;grid-template-columns:234px 1fr;min-height:100vh}
-aside{background:var(--surface);border-right:1px solid var(--border);
-  display:flex;flex-direction:column;position:sticky;top:0;height:100vh}
-.logo{padding:18px 18px 15px;border-bottom:1px solid var(--border)}
-.logo b{display:block;font-size:15px;font-weight:600;letter-spacing:-.01em;color:var(--ink)}
-.logo span{display:block;color:var(--ink3);font-size:9.5px;margin-top:3px;
+/* The aside itself STRETCHES to the full height of the grid row, so its
+   background and border run the whole length of the page. Only its contents
+   stick. Making the aside itself sticky with height:100vh left the column
+   blank below the fold on any page taller than the viewport — which is most
+   of them. */
+aside{background:var(--surface);border-right:1px solid var(--border)}
+aside>.inner{position:sticky;top:0;height:100vh;display:flex;flex-direction:column}
+.logo{padding:16px 18px 14px;border-bottom:1px solid var(--border);
+  display:flex;align-items:center;gap:11px}
+.logo img{width:34px;height:34px;flex:none;display:block}
+.logo .t{min-width:0}
+.logo b{display:block;font-size:15px;font-weight:600;letter-spacing:-.01em;color:var(--ink);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.logo span{display:block;color:var(--ink3);font-size:9.5px;margin-top:2px;
   text-transform:uppercase;letter-spacing:.9px;font-weight:600}
 .navsec{padding:14px 14px 6px;font-size:9.5px;font-weight:700;color:var(--ink3);
   text-transform:uppercase;letter-spacing:.9px}
@@ -198,7 +207,7 @@ pre{margin:0;white-space:pre-wrap;word-break:break-word;font-family:var(--mono);
 
 @media(max-width:900px){
   .shell{grid-template-columns:1fr}
-  aside{position:static;height:auto}
+  aside>.inner{position:static;height:auto}
   aside nav{display:flex;overflow-x:auto;padding:6px}
   aside nav a{white-space:nowrap}
   .navsec{display:none}
@@ -261,14 +270,19 @@ function layout({ title, admin, current, body, flash }) {
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow">
 <title>${esc(title)} · ${esc(full)}</title>
+<link rel="icon" href="/admin/favicon.ico" sizes="any">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>${STYLE}</style>
 </head><body>
 <div class="shell">
-  <aside>
-    <div class="logo"><b>${brand}</b><span>API Gateway</span></div>
+  <aside><div class="inner">
+    <div class="logo">
+      <img src="/admin/logo.png" alt="" width="34" height="34">
+      <div class="t"><b>${brand}</b><span>API Gateway</span></div>
+    </div>
     <div class="navsec">Gateway</div>
     <nav>${nav}</nav>
     <div class="who">
@@ -276,7 +290,7 @@ function layout({ title, admin, current, body, flash }) {
       <span class="rl">${esc(admin.role || '')}${admin.canEdit ? '' : ' · read only'}</span>
       <form method="post" action="/admin/logout"><button type="submit">Sign out</button></form>
     </div>
-  </aside>
+  </div></aside>
   <main>${flashHtml}${readOnly}${body}</main>
 </div>
 </body></html>`;

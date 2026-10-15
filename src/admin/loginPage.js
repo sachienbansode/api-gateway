@@ -34,6 +34,8 @@ function render({ error = '', title = 'API Gateway', email = '' } = {}) {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
 <title>Sign in · ${esc(title)}</title>
+<link rel="icon" href="/admin/favicon.ico" sizes="any">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600&display=swap" rel="stylesheet">
@@ -58,6 +60,7 @@ function render({ error = '', title = 'API Gateway', email = '' } = {}) {
     font-size:13px;line-height:1.55;-webkit-font-smoothing:antialiased}
   .card{width:100%;max-width:382px;background:var(--surface);border:1px solid var(--border);
     border-radius:var(--r-lg);padding:30px 28px 26px;overflow:hidden}
+  .mark{display:block;width:52px;height:52px;margin:0 0 14px}
   .brand{display:block;font-size:19px;font-weight:600;letter-spacing:-.015em;color:var(--ink)}
   .kicker{display:block;margin-top:3px;font-size:9.5px;font-weight:600;color:var(--ink3);
     text-transform:uppercase;letter-spacing:1px}
@@ -83,6 +86,7 @@ function render({ error = '', title = 'API Gateway', email = '' } = {}) {
 </head>
 <body>
   <main class="card">
+    <img class="mark" src="/admin/logo.png" alt="" width="52" height="52">
     <h1 style="margin:0"><span class="brand">${esc(brand)}</span>${
       kicker ? `<span class="kicker">${esc(kicker)}</span>` : ''
     }</h1>

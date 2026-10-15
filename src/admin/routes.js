@@ -102,6 +102,13 @@ function buildAdminRouter(logger, deps = {}) {
     next();
   });
 
+  // Before the session check on purpose: the login page shows the mark, and a
+  // logo behind authentication means a broken image on the one screen every
+  // person sees first.
+  const assets = require('./assets');
+  router.get('/logo.png', assets.serve('logo.png'));
+  router.get('/favicon.ico', assets.serve('favicon.ico'));
+
   const title = process.env.ADMIN_TITLE || process.env.API_TITLE || 'API Gateway';
 
   // -------------------------------------------------------------------------
