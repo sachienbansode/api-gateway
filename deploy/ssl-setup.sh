@@ -29,7 +29,16 @@ set -euo pipefail
 DOMAIN="${DOMAIN:-pravah.ashikagroup.com}"
 EMAIL="${EMAIL:-treeantstechnologies@gmail.com}"
 APP_DIR="${APP_DIR:-/var/apps/api-gateway}"
-SITE_NAME="api-gateway"
+# zz- so this file sorts LAST in sites-enabled.
+#
+# nginx gives an unmatched Host to the first server block it loaded for that
+# address:port, and sites-enabled is read in filename order. "api-gateway"
+# sorts before "ofs.conf", so without this we silently became the default
+# server and started answering for host names belonging to the other
+# application. Neither config declares default_server, so load order is the
+# whole of the decision. Measured both ways: first file wins.
+SITE_NAME="zz-api-gateway"
+LEGACY_SITE_NAME="api-gateway"
 SITE="/etc/nginx/sites-available/$SITE_NAME"
 WEBROOT="/var/www/pravah-acme"
 
@@ -84,7 +93,7 @@ grep -RhoE 'server_name[^;]*;' /etc/nginx/sites-enabled/ 2>/dev/null \
 
 # A second block claiming our name would make the outcome depend on file order.
 CLAIMS="$(grep -RlE "server_name[^;]*\b${DOMAIN//./\\.}\b" /etc/nginx/sites-enabled/ 2>/dev/null \
-          | grep -v "/$SITE_NAME\$" || true)"
+          | grep -vE "/($SITE_NAME|$LEGACY_SITE_NAME)\$" || true)"
 [ -z "$CLAIMS" ] || fail "another site also claims $DOMAIN:
      $CLAIMS
      Two blocks with the same server_name means nginx picks whichever it read
@@ -94,7 +103,7 @@ CLAIMS="$(grep -RlE "server_name[^;]*\b${DOMAIN//./\\.}\b" /etc/nginx/sites-enab
 # hard nginx failure, and it is better to know now than after the reload.
 for n in vendor_ip vendor_conn admin_ip vendor_wrapper pravah_app_boot; do
   HIT="$(grep -RlE "(zone=$n[: ]|upstream\s+$n\s)" /etc/nginx/sites-enabled/ /etc/nginx/conf.d/ 2>/dev/null \
-         | grep -v "/$SITE_NAME\$" || true)"
+         | grep -vE "/($SITE_NAME|$LEGACY_SITE_NAME)\$" || true)"
   [ -z "$HIT" ] || fail "the name '$n' is already used by: $HIT
      Rename it in deploy/nginx.conf before continuing."
 done
@@ -102,7 +111,8 @@ done
 # Record how the other sites answer now, so we can prove we did not break them.
 OTHERS="$(ls -1 /etc/nginx/sites-enabled/ 2>/dev/null | grep -v "^$SITE_NAME\$" || true)"
 BEFORE="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1/ || echo '---')"
-note "the default host on 127.0.0.1:80 currently answers: $BEFORE"
+note "an unmatched Host on 127.0.0.1:80 currently answers: $BEFORE"
+note "(this is whichever site owns the default server — it should not change)"
 
 RESOLVED="$(getent hosts "$DOMAIN" | awk '{print $1}' | head -1 || true)"
 MYIP="$(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null || true)"
@@ -155,6 +165,12 @@ if [ "$NEED_CERT" = "no" ]; then
   say "Step 1 and 2 — not needed, going straight to the TLS config"
 else
 say "Step 1 — adding our HTTP-only site (nothing else is touched)"
+# An earlier run may have enabled this under the old name, which loaded before
+# the other application's config and took the default server with it.
+if [ -L "/etc/nginx/sites-enabled/$LEGACY_SITE_NAME" ]; then
+  note "removing the old sites-enabled/$LEGACY_SITE_NAME link (it loaded too early)"
+  rm -f "/etc/nginx/sites-enabled/$LEGACY_SITE_NAME"
+fi
 install -d -m 755 "$WEBROOT/.well-known/acme-challenge"
 install_site "$APP_DIR/deploy/nginx-bootstrap.conf"
 ln -sf "$SITE" "/etc/nginx/sites-enabled/$SITE_NAME"
@@ -234,6 +250,7 @@ fi   # end of "a certificate is needed"
 # 3. The TLS config
 # ---------------------------------------------------------------------------
 say "Step 3 — switching our site to TLS"
+rm -f "/etc/nginx/sites-enabled/$LEGACY_SITE_NAME"
 cp "$SITE" "/tmp/$SITE_NAME.before-tls.$(date +%s)" 2>/dev/null || true
 install_site "$APP_DIR/deploy/nginx.conf"
 # Enabling the site lives here as well as in step 1, because step 1 is skipped
@@ -276,9 +293,17 @@ fi
 # 5. Prove it
 # ---------------------------------------------------------------------------
 say "Step 5 — proving it works"
-printf '    https://%s/healthz       -> ' "$DOMAIN"; curl -fsS -o /dev/null -w '%{http_code}\n' "https://$DOMAIN/healthz" || echo FAILED
+printf '    https://%s/healthz       -> ' "$DOMAIN"
+# Over loopback on purpose. /healthz is restricted to the VNet and localhost
+# because it is unauthenticated; fetching it by public name leaves the machine
+# and comes back from the public IP, which that allowlist correctly refuses.
+# A 403 there would be the rule working, not a fault, and printing it as a
+# failure sends people looking for a problem that is not there.
+curl -fsS -k --resolve "$DOMAIN:443:127.0.0.1" -o /dev/null -w '%{http_code} (via loopback)\n' \
+  "https://$DOMAIN/healthz" || echo "FAILED — check: pm2 logs api-gateway"
 printf '    https://%s/admin/login   -> ' "$DOMAIN"; curl -fsS -o /dev/null -w '%{http_code}\n' "https://$DOMAIN/admin/login" || echo FAILED
-printf '    http -> https redirect       : '; curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' "http://$DOMAIN/admin/login"
+printf '    http is refused              : '; curl -s -o /dev/null -w '%{http_code} (403 = plain HTTP blocked, as intended)\n' "http://$DOMAIN/admin/login"
+printf '    acme path still open on 80   : '; curl -s -o /dev/null -w '%{http_code} (404 = reachable, nothing to serve)\n' "http://$DOMAIN/.well-known/acme-challenge/none"
 printf '    certificate expires          : '; openssl x509 -enddate -noout -in "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" | cut -d= -f2
 printf '    other sites on port 80       : '; check_others
 
