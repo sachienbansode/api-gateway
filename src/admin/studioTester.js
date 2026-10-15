@@ -13,7 +13,22 @@ const projection = require('../core/projection');
  * a path and gets back a result; the token stays in this process.
  */
 
-const MAX_BODY_BYTES = 2 * 1024 * 1024; // 2 MB — plenty for a sample, bounded for safety
+/**
+ * How much of a supplier response this preview will read.
+ *
+ * Raised from 2 MB after CMOTS CompanyMaster — a full company master list —
+ * came back at just over it. The old code cut the body mid-string and then ran
+ * JSON.parse on the fragment, which failed with "Unterminated string at
+ * position 2096513" and was reported as "the supplier answered 200 but the
+ * body is not JSON". The supplier was fine. We truncated it and blamed them,
+ * and the position in the message was our own cap, which is the sort of error
+ * that sends somebody to the wrong team for an afternoon.
+ *
+ * This is an admin-only preview on a box with plenty of memory, so the limit
+ * exists to stop a runaway response, not to be thrifty. Beyond it the response
+ * is reported as too large to preview — never as invalid.
+ */
+const MAX_BODY_BYTES = Number(process.env.STUDIO_MAX_BODY_BYTES) || 16 * 1024 * 1024;
 
 /** Resolve "${VAR}" against the process environment. */
 function resolveRef(ref) {
@@ -149,29 +164,39 @@ async function callUpstream({ baseUrl, path, query = {}, method = 'GET', body = 
       body: body ? JSON.stringify(body) : undefined,
     });
     const ms = Date.now() - started;
-    const text = await readCapped(res);
+    const { text, truncated, bytes } = await readCapped(res);
     let parsed = null;
     let parseError = null;
     const ctype = res.headers.get('content-type') || '';
-    try {
-      parsed = text ? JSON.parse(text) : null;
-    } catch (e) {
-      parseError = e.message;
+    // Not parsed when truncated. Parsing a fragment can only fail, and the
+    // failure would describe our cut rather than their response.
+    if (!truncated) {
+      try {
+        parsed = text ? JSON.parse(text) : null;
+      } catch (e) {
+        parseError = e.message;
+      }
     }
     return {
       ok: res.ok && parsed !== null,
       status: res.status,
       ms,
       contentType: ctype,
-      bytes: Buffer.byteLength(text || ''),
+      bytes,
+      truncated,
       body: parsed,
       raw: parsed === null ? (text || '').slice(0, 2000) : null,
       parseError,
       url: url.toString(),
       error: res.ok
-        ? parsed === null
-          ? `the supplier answered ${res.status} but the body is not JSON${parseError ? ` (${parseError})` : ''}`
-          : null
+        ? truncated
+          ? `the supplier answered ${res.status} and the response is larger than ` +
+            `${mb(MAX_BODY_BYTES)}, which is as much as this preview reads. The endpoint ` +
+            'itself is not limited — this only affects testing here. Call a narrower path ' +
+            'if you need to see the shape, or raise STUDIO_MAX_BODY_BYTES.'
+          : parsed === null
+            ? `the supplier answered ${res.status} but the body is not JSON${parseError ? ` (${parseError})` : ''}`
+            : null
         : `the supplier answered ${res.status}`,
     };
   } catch (err) {
@@ -190,23 +215,38 @@ async function callUpstream({ baseUrl, path, query = {}, method = 'GET', body = 
   }
 }
 
+/**
+ * @returns {{text:string, truncated:boolean, bytes:number}}
+ *
+ * `truncated` is the point of this function. A caller that cannot tell the
+ * difference between "this is the whole body" and "this is the first N bytes
+ * of it" will parse the fragment and misattribute the failure.
+ */
 async function readCapped(res) {
   const reader = res.body?.getReader?.();
-  if (!reader) return await res.text();
+  if (!reader) {
+    const text = await res.text();
+    return { text, truncated: false, bytes: Buffer.byteLength(text) };
+  }
   const chunks = [];
   let total = 0;
+  let truncated = false;
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
     total += value.length;
     if (total > MAX_BODY_BYTES) {
+      truncated = true;
       try { await reader.cancel(); } catch { /* already finished */ }
       break;
     }
     chunks.push(Buffer.from(value));
   }
-  return Buffer.concat(chunks).toString('utf8');
+  const text = Buffer.concat(chunks).toString('utf8');
+  return { text, truncated, bytes: truncated ? total : Buffer.byteLength(text) };
 }
+
+const mb = (n) => (n / (1024 * 1024)).toFixed(1) + ' MB';
 
 /** Every leaf path in a sample body, in the whitelist's own notation. */
 function discover(body) {
