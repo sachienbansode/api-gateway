@@ -4,30 +4,58 @@ const crypto = require('crypto');
 const adminDb = require('../adminPool');
 
 /**
- * The platform's SMTP settings, read (never written) from its admin schema.
+ * Where the sign-in code gets emailed from.
  *
- * One mail configuration for the whole platform is the point. The gateway does
- * not get its own SMTP host, its own credential and its own from-address to
- * drift out of date — when someone rotates the mail password in the platform's
- * Settings screen, this console follows automatically.
+ * TWO sources, and the first one is the one to use.
  *
- * The stored password is AES-256-GCM, in the platform's own format:
+ * 1. GW_SMTP_* in this server's own env file. Its own mailbox credential,
+ *    readable only by this application.
  *
- *     ivHex : authTagHex : ciphertextHex
+ * 2. The platform's smtp_settings row, read (never written). Appealing at
+ *    first glance — one mail configuration, rotated in one place — and the
+ *    reason it is NOT the default is worth writing down, because it was the
+ *    original design here and it was wrong.
  *
- * with the key being sha256(API_KEY_SECRET). That is the platform's scheme,
- * reimplemented here rather than imported, because the two applications do not
- * share a codebase. If the platform ever changes it, this is the one function
- * that has to change with it — hence the explicit shape check and a message
- * that says what to look at.
+ *    The platform stores that password encrypted under sha256(API_KEY_SECRET).
+ *    Reading it means putting API_KEY_SECRET on this VM. But in the platform
+ *    that same secret also encrypts, at minimum:
  *
- * API_KEY_SECRET must therefore be byte-identical to the platform's. It is NOT
- * the gateway's GW_SECRET_KEY and must not be set to it: GW_SECRET_KEY protects
- * supplier credentials and has no business being shared with another system.
+ *      * every saved ETL database connection password  (db/etlPool.js)
+ *      * every partner API key, revealably             (routes/admin.js)
+ *
+ *    So sharing it to send one email would mean that anyone who reads this
+ *    gateway's env file can decrypt the platform's stored database passwords
+ *    and partner keys. That is an enormous grant bought for a very small
+ *    convenience, and it quietly makes this VM as sensitive as the platform
+ *    itself. Option 1 costs one more line in an env file.
+ *
+ * Option 2 remains available for a deployment that genuinely shares a trust
+ * boundary with the platform, and has to be turned on deliberately.
  */
 
 const CACHE_MS = Number(process.env.SMTP_CACHE_MS || 60000);
 let cached = null; // { at, row }
+
+/** This server's own mail credential, if it has one. */
+function localConfig() {
+  const host = process.env.GW_SMTP_HOST;
+  if (!host) return null;
+  const from = process.env.GW_SMTP_FROM || '';
+  return {
+    host,
+    port: Number(process.env.GW_SMTP_PORT) || 587,
+    secure: String(process.env.GW_SMTP_SECURE || 'false').toLowerCase() === 'true',
+    user: process.env.GW_SMTP_USER || '',
+    pass: process.env.GW_SMTP_PASSWORD || '',
+    from: from || process.env.GW_SMTP_USER || '',
+    fromName: process.env.GW_SMTP_FROM_NAME || 'Pravah API Gateway',
+  };
+}
+
+/** Has the operator opted in to borrowing the platform's mail credential? */
+function platformAllowed() {
+  return String(process.env.SMTP_FROM_PLATFORM || 'false').toLowerCase() === 'true';
+}
 
 function decryptPassword(encrypted) {
   const secret = process.env.API_KEY_SECRET;
@@ -76,6 +104,23 @@ function invalidate() {
  * receive.
  */
 async function ready() {
+  const local = localConfig();
+  if (local) {
+    if (!local.from) return { ok: false, reason: 'GW_SMTP_FROM is not set' };
+    return { ok: true, host: local.host, from: local.from, source: 'this server' };
+  }
+  if (!platformAllowed()) {
+    return {
+      ok: false,
+      reason:
+        'no mail is configured for this gateway. Set GW_SMTP_HOST, GW_SMTP_USER, ' +
+        'GW_SMTP_PASSWORD and GW_SMTP_FROM in /etc/api-gateway/env. (Borrowing the ' +
+        "platform's mail credential instead needs SMTP_FROM_PLATFORM=true and puts " +
+        "the platform's API_KEY_SECRET on this server — read why that is a bad trade " +
+        'in src/db/repos/platformSmtp.js before doing it.)',
+    };
+  }
+
   let row;
   try {
     row = await settings();
@@ -103,9 +148,26 @@ async function ready() {
 
 /** Everything nodemailer needs, with the password decrypted. Never logged. */
 async function transportConfig() {
-  const row = await settings();
   const state = await ready();
   if (!state.ok) throw new Error(state.reason);
+
+  const local = localConfig();
+  if (local) {
+    return {
+      transport: {
+        host: local.host,
+        port: local.port,
+        secure: local.secure,
+        // An internal relay that accepts mail from this subnet without a
+        // login is a normal arrangement; sending `auth: {user:'',pass:''}`
+        // makes nodemailer attempt AUTH and the relay refuse the message.
+        ...(local.user ? { auth: { user: local.user, pass: local.pass } } : {}),
+      },
+      from: `"${local.fromName}" <${local.from}>`,
+    };
+  }
+
+  const row = await settings();
   return {
     transport: {
       host: row.host,
@@ -117,4 +179,7 @@ async function transportConfig() {
   };
 }
 
-module.exports = { settings, ready, transportConfig, invalidate, decryptPassword };
+module.exports = {
+  settings, ready, transportConfig, invalidate, decryptPassword,
+  localConfig, platformAllowed,
+};
