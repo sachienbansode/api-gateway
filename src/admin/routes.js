@@ -653,6 +653,58 @@ function buildAdminRouter(logger, deps = {}) {
 
   const mailRepo = require('../db/repos/mailSettings');
 
+  // -------------------------------------------------------------------------
+  // Logs
+  // -------------------------------------------------------------------------
+  const logsRepo = require('../db/repos/logs');
+  const logsPage = require('./logsPage');
+
+  /** Empty query string means "no filter", not a filter on the empty string. */
+  const str = (v) => (v === undefined || v === null || v === '' ? null : String(v));
+
+  const logQuery = (req) => ({
+    q: str(req.query.q), since: str(req.query.since), page: req.query.page,
+    consumer: str(req.query.consumer), endpoint: str(req.query.endpoint),
+    status: str(req.query.status), actor: str(req.query.actor), area: str(req.query.area),
+  });
+
+  router.get('/logs', async (req, res, next) => {
+    try {
+      const query = logQuery(req);
+      const since = query.since || '24h';
+      const [page, summary, facets] = await Promise.all([
+        logsRepo.traffic({ ...query, since }),
+        logsRepo.trafficSummary({ since, consumer: query.consumer, endpoint: query.endpoint }),
+        logsRepo.trafficFacets({ since }),
+      ]);
+      res.type('html').send(
+        logsPage.trafficPage({ admin: req.admin, flash: flashOf(req), page, summary, facets, query })
+      );
+    } catch (err) { next(err); }
+  });
+
+  router.get('/logs/changes', async (req, res, next) => {
+    try {
+      const query = logQuery(req);
+      const since = query.since || '30d';
+      const [page, facets] = await Promise.all([
+        logsRepo.changes({ ...query, since }),
+        logsRepo.changeFacets(),
+      ]);
+      res.type('html').send(
+        logsPage.changesPage({ admin: req.admin, flash: flashOf(req), page, facets, query })
+      );
+    } catch (err) { next(err); }
+  });
+
+  router.get('/logs/changes/:id', async (req, res, next) => {
+    try {
+      const row = await logsRepo.catalogDiff(req.params.id);
+      if (!row) return next();
+      res.type('html').send(logsPage.diffPage({ admin: req.admin, flash: flashOf(req), row }));
+    } catch (err) { next(err); }
+  });
+
   /**
    * How it works. Static, but rendered rather than a file, because it reads
    * the public base URL so the diagram names THIS deployment's host rather
@@ -714,7 +766,7 @@ function buildAdminRouter(logger, deps = {}) {
       await mailRepo.save(mailInput(req.body || {}), req.admin.email);
       logger.info({ actor: req.admin.email, host: (req.body || {}).host }, 'mail settings changed');
       res.redirect(303, '/admin/settings?ok=' + encodeURIComponent(
-        'Saved. Press Test connection to check it before anyone needs it.'));
+        'Saved. Press Test connection to check it before anyone needs it.') + '#mail');
     } catch (err) {
       res.redirect(303, '/admin/settings?err=' + encodeURIComponent(err.message));
     }
@@ -744,14 +796,14 @@ function buildAdminRouter(logger, deps = {}) {
       await mailRepo.recordTest({ ok: true });
       logger.info({ actor: req.admin.email, host: state.host }, 'mail test succeeded');
       res.redirect(303, '/admin/settings?ok=' + encodeURIComponent(
-        `Connected to ${state.host}. Sign-in codes can be sent.`));
+        `Connected to ${state.host}. Sign-in codes can be sent.`) + '#mail');
     } catch (err) {
       // Recorded as well as shown: the next person to open this screen should
       // see that it is broken without having to press the button themselves.
       await mailRepo.recordTest({ ok: false, error: err.message }).catch(() => {});
       logger.warn({ actor: req.admin.email, err: err.message }, 'mail test failed');
       res.redirect(303, '/admin/settings?err=' + encodeURIComponent(
-        `Could not connect: ${err.message}`));
+        `Could not connect: ${err.message}`) + '#mail');
     }
   });
 

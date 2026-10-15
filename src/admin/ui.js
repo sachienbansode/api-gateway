@@ -259,6 +259,8 @@ pre{margin:0;white-space:pre-wrap;word-break:break-word;font-family:var(--mono);
 `;
 
 const ICON = {
+  logs:
+    '<path d="M4 4h16v16H4z"/><path d="M8 9h8M8 13h8M8 17h5"/>',
   how:
     '<circle cx="12" cy="12" r="9"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"/>'
     + '<path d="M12 17h.01"/>',
@@ -286,7 +288,8 @@ const TABS = [
   ['/admin/catalog', 'Catalogue', 'catalog', 'DATA'],
   ['/admin/consumers', 'Consumers', 'consumers', 'MGMT'],
   ['/admin/endpoints', 'Endpoints', 'endpoints', 'CFG'],
-  ['/admin/activity', 'Activity', 'activity', 'LOGS'],
+  ['/admin/activity', 'Activity', 'activity', 'USAGE'],
+  ['/admin/logs', 'Logs', 'logs', 'AUDIT'],
   ['/admin/health', 'Health', 'health', ''],
   ['/admin/settings', 'Admin config', 'settings', 'CFG'],
   ['/admin/how', 'How it works', 'how', ''],

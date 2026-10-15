@@ -148,24 +148,36 @@ function render({ admin, flash, settings, history, mail }) {
   const body = `
 ${pageHead('Admin config', 'Settings that belong to the product rather than to the machine it runs on.')}
 
+<div class="tabs" role="tablist">
+  <button type="button" role="tab" data-tab="general" aria-selected="true">General</button>
+  <button type="button" role="tab" data-tab="mail" aria-selected="false">Mail</button>
+  <button type="button" role="tab" data-tab="secrets" aria-selected="false">Kept in the env file</button>
+  <button type="button" role="tab" data-tab="history" aria-selected="false">Change history</button>
+</div>
+
+<section class="tabpane" id="tab-general">
 <form method="post" action="/admin/settings">
-  ${panel('Vendor-facing', '', `<div class="fields">${fields}</div>
+  ${panel('Consumer-facing', '', `<div class="fields">${fields}</div>
     <div class="formfoot">
-      <button type="submit" class="primary"
+      <button type="submit" class="primary"${admin.canEdit ? '' : ' disabled'}
         data-confirm="Save these settings?"
         data-confirm-body="The public base URL appears in every Postman collection and in the API documentation partners work from. Changing it does not move the gateway — it changes what consumers are told to call.">Save</button>
       <p class="hint">A blank field falls back to the environment, which is what a fresh
         deployment uses.</p>
     </div>`)}
 </form>
+</section>
 
+<section class="tabpane hidden" id="tab-mail">
 ${mailPanel(mail, admin.canEdit)}
+</section>
 
+<section class="tabpane hidden" id="tab-secrets">
 ${panel('Kept in /etc/api-gateway/env, deliberately', '', `
   <dl class="cfg">
     <dt>GW_SECRET_KEY</dt>
-      <dd>Decrypts every stored supplier credential. In the database it would be a lock
-          taped to its own door — a dump would contain both.</dd>
+      <dd>Decrypts every stored supplier credential, and the mail password. In the database
+          it would be a lock taped to its own door — a dump would contain both.</dd>
     <dt>GW_DATABASE_URL · AUTH_DATABASE_URL</dt>
       <dd>How to reach this table. It cannot configure itself.</dd>
     <dt>JWT_SECRET</dt>
@@ -175,14 +187,54 @@ ${panel('Kept in /etc/api-gateway/env, deliberately', '', `
       <dd>In the database, but encrypted and never shown in full — see a supplier in the
           <a href="/admin/catalog/upstreams">catalogue</a>.</dd>
   </dl>`)}
+</section>
 
-${tablePanel('Change history', '',
+<section class="tabpane hidden" id="tab-history">
+${tablePanel('Change history', 'Every settings change, who made it, and what it was before.',
   '<th>When</th><th>Setting</th><th>Was</th><th>Became</th><th>By</th>', historyRows)}
+</section>
 
 <script>
 // Quick setup only fills the host and port. It deliberately does not touch the
 // username or the from-address: those are this organisation's, not the
 // provider's, and overwriting what somebody typed would be rude.
+/* Tabs.
+   The chosen tab goes in the URL hash, so a link to Admin config can land
+   somebody on Mail directly and a reload after saving does not throw them back
+   to General — which is exactly when they want to look at what they just
+   changed. */
+(function () {
+  var tabs = document.querySelectorAll('[role=tab]');
+  function show(name, push) {
+    var found = false;
+    tabs.forEach(function (t) {
+      var on = t.getAttribute('data-tab') === name;
+      if (on) found = true;
+      t.setAttribute('aria-selected', on ? 'true' : 'false');
+      var pane = document.getElementById('tab-' + t.getAttribute('data-tab'));
+      if (pane) pane.classList[on ? 'remove' : 'add']('hidden');
+    });
+    if (found && push && history.replaceState) history.replaceState(null, '', '#' + name);
+    return found;
+  }
+  tabs.forEach(function (t) {
+    t.addEventListener('click', function () { show(t.getAttribute('data-tab'), true); });
+  });
+  // A flash message always belongs to a save, and every save here is a form in
+  // one specific tab. Landing on General with a green bar about mail settings
+  // is confusing, so the hash wins and the default is General.
+  function fromHash() {
+    var want = (location.hash || '').replace('#', '');
+    if (!want || !show(want, false)) show('general', false);
+  }
+  fromHash();
+  // Moving between hashes on the same page is NOT a page load, so without
+  // this the back button leaves the URL saying one tab and the screen showing
+  // another — and a link to #mail from somewhere already on this page does
+  // nothing at all.
+  window.addEventListener('hashchange', fromHash);
+})();
+
 document.querySelectorAll('.preset').forEach(function (b) {
   b.addEventListener('click', function () {
     document.getElementById('m_host').value = b.getAttribute('data-host');
@@ -193,6 +245,14 @@ document.querySelectorAll('.preset').forEach(function (b) {
 </script>
 
 <style>
+.tabs{display:flex;gap:2px;margin-bottom:14px;border-bottom:1px solid var(--border);
+  flex-wrap:wrap}
+.tabs button{padding:8px 14px;font-size:12.5px;font-family:inherit;color:var(--ink3);
+  background:none;border:0;border-bottom:2px solid transparent;margin-bottom:-1px;
+  cursor:pointer;border-radius:0}
+.tabs button:hover{color:var(--ink);background:none}
+.tabs button[aria-selected=true]{color:var(--ink);font-weight:600;border-bottom-color:var(--gold)}
+.tabpane.hidden{display:none}
 .chk{display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:400;
   text-transform:none;letter-spacing:0;color:var(--ink);cursor:pointer}
 .chk input{width:auto;margin:0}
