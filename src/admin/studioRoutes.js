@@ -5,6 +5,8 @@ const path = require('path');
 const express = require('express');
 
 const studio = require('../db/repos/studio');
+const secrets = require('../db/repos/secrets');
+const secretbox = require('../core/secretbox');
 const tester = require('./studioTester');
 const studioPage = require('./studioPage');
 
@@ -102,39 +104,133 @@ function json(logger, deps = {}) {
       if (!/^https?:\/\//.test(String(row.baseUrl || ''))) {
         return res.status(400).json({ error: 'the base URL must start with http:// or https://' });
       }
-      // The one rule the UI must not be able to talk its way out of: what
-      // lands in the column is the NAME of an environment variable. A pasted
-      // token is rejected here rather than quietly stored.
+      // A credential arrives one of two ways, and the UI may not invent a
+      // third. Either a ${VAR} reference, which is stored as written, or a
+      // token in `authSecret`, which is encrypted before it touches a column
+      // and is never echoed back.
+      const plaintext = typeof row.authSecret === 'string' ? row.authSecret.trim() : '';
+      const ref = String(row.authValueEnv || '').trim();
+      const existing = plaintext
+        ? null
+        : (await secrets.status(row.name).catch(() => []))[0] || null;
+      const alreadySealed = Boolean(existing && existing.secret_stored);
+
       if (row.authType && row.authType !== 'none') {
-        const ref = String(row.authValueEnv || '').trim();
-        if (!/^\$\{[A-Z0-9_]+\}$/.test(ref)) {
+        if (plaintext) {
+          if (!secretbox.enabled()) {
+            return res.status(400).json({
+              error: 'GW_SECRET_KEY is not set on this server, so a credential cannot be ' +
+                'encrypted. Generate one with  node -e "console.log(\'v1:\'+' +
+                'require(\'crypto\').randomBytes(32).toString(\'base64\'))"  then add it ' +
+                'to /etc/api-gateway/env and restart. Until then, use a ${VAR} reference.',
+            });
+          }
+          if (/^\$\{[A-Z0-9_]+\}$/.test(plaintext)) {
+            return res.status(400).json({
+              error: 'That looks like a variable reference, not a token. Put it in the ' +
+                'reference field instead, or paste the real credential here.',
+            });
+          }
+        } else if (!alreadySealed && !/^\$\{[A-Z0-9_]+\}$/.test(ref)) {
           return res.status(400).json({
-            error: 'The credential field takes the NAME of an environment variable, ' +
-              'written as ${SUPPLIER_TOKEN} — not the token itself. Put the value in ' +
-              '/etc/api-gateway/env on the server.',
+            error: 'This supplier needs a credential: either paste the token (it is ' +
+              'encrypted before it is stored) or give the name of an environment ' +
+              'variable as ${SUPPLIER_TOKEN}.',
           });
         }
       }
+
       const saved = await studio.saveUpstream(row, req.admin.email);
-      const ref = tester.resolveRef(saved.auth_value_env);
+
+      let credential = null;
+      if (plaintext) {
+        const sealed = await secrets.set({
+          upstream: saved.name, slot: 'value', plaintext, actor: req.admin.email,
+        });
+        if (row.authType === 'basic' && typeof row.authUser === 'string' && row.authUser.trim()) {
+          await secrets.set({
+            upstream: saved.name, slot: 'username',
+            plaintext: row.authUser.trim(), actor: req.admin.email,
+          });
+        }
+        credential = {
+          stored: true,
+          hint: sealed.hint ? `••••${sealed.hint}` : '••••',
+          keyId: sealed.keyId,
+          rotated: sealed.rotated,
+        };
+        if (deps.reloadCatalog) await deps.reloadCatalog().catch(() => {});
+      }
+
+      const status = (await secrets.status(saved.name).catch(() => []))[0] || null;
+      const envRef = tester.resolveRef(saved.auth_value_env);
       res.json({
         upstream: saved,
-        envHint: ref.varName
-          ? ref.set
-            ? `${ref.varName} is set on this server.`
-            : `${ref.varName} is NOT set on this server — add it to /etc/api-gateway/env and restart.`
-          : '',
+        credential: credential || (status && status.secret_stored
+          ? {
+              stored: true,
+              hint: status.secret_hint ? status.secret_hint.replace(/^\*{4}/, '••••') : '••••',
+              keyId: status.key_id, setAt: status.set_at, setBy: status.set_by,
+            }
+          : { stored: false }),
+        envHint: status && status.secret_stored
+          ? credential
+            ? credential.rotated
+              ? 'Credential replaced and encrypted. The old one no longer works.'
+              : 'Credential encrypted and stored. It is not readable from the database.'
+            : ''
+          : envRef.varName
+            ? envRef.set
+              ? `${envRef.varName} is set on this server.`
+              : `${envRef.varName} is NOT set on this server — add it to /etc/api-gateway/env and restart.`
+            : '',
       });
     } catch (err) { next(err); }
+  });
+
+  r.get('/credentials', async (req, res, next) => {
+    try {
+      res.json({
+        keySet: secretbox.enabled(),
+        credentials: await secrets.status(req.query.upstream || null),
+        recent: await secrets.recentAudit(10),
+      });
+    } catch (err) { next(err); }
+  });
+
+  r.post('/upstream/:name/credential/clear', async (req, res) => {
+    try {
+      await secrets.clear({ upstream: String(req.params.name), actor: req.admin.email });
+      if (deps.reloadCatalog) await deps.reloadCatalog().catch(() => {});
+      res.json({ cleared: true });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  r.post('/credentials/rotate', async (req, res) => {
+    try {
+      const out = await secrets.rotateAll(req.admin.email);
+      if (deps.reloadCatalog) await deps.reloadCatalog().catch(() => {});
+      res.json(out);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
   });
 
   r.post('/test-upstream', async (req, res, next) => {
     try {
       const { upstream = {}, path: p = '' } = req.body || {};
+      // If a credential is sealed for this upstream, it is read here, on the
+      // server. The browser never sends one and never receives one.
+      const sealed = upstream.name
+        ? await secrets.resolveAll(upstream.name).catch(() => null)
+        : null;
       const result = await tester.callUpstream({
         baseUrl: upstream.baseUrl,
         path: p,
         timeoutMs: upstream.timeoutMs,
+        secrets: sealed,
         upstream: {
           auth_type: upstream.authType,
           auth_name: upstream.authName,
@@ -235,10 +331,14 @@ function json(logger, deps = {}) {
           error: `fill in ${filled.missing.join(', ')} before running the test`,
         });
       }
+      const sealed = (b.upstream || {}).name
+        ? await secrets.resolveAll(b.upstream.name).catch(() => null)
+        : null;
       const result = await tester.callUpstream({
         baseUrl: (b.upstream || {}).baseUrl,
         path: filled.path,
         timeoutMs: (b.upstream || {}).timeoutMs,
+        secrets: sealed,
         upstream: {
           auth_type: (b.upstream || {}).authType,
           auth_name: (b.upstream || {}).authName,

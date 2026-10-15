@@ -10,11 +10,18 @@
 -- Prerequisites: db/migrations/001_init.sql, 002_catalog.sql and
 -- 003_studio.sql have been applied.
 --
--- ⚠ NO CREDENTIAL IS IN THIS FILE. The upstream references the environment
---   variable ${CMOTS_API_TOKEN}. Put the real token in /etc/api-gateway/env on
---   the VM and restart. The CHECK constraint on upstreams rejects anything
---   that is not a ${VAR} reference, so a token cannot be pasted here by
---   accident.
+-- ⚠ NO CREDENTIAL IS IN THIS FILE, and none should ever be added to it.
+--   The upstream is seeded pointing at the environment variable
+--   ${CMOTS_API_TOKEN}, which is the fallback. The intended path is to paste
+--   the token into step 1 of the API Studio: it is sealed with AES-256-GCM
+--   before it reaches a column, and the key lives in GW_SECRET_KEY in
+--   /etc/api-gateway/env — never in this database. Saving it there flips
+--   upstreams.auth_source to 'vault' and the environment variable stops
+--   being consulted.
+--
+--   The CHECK constraint on upstreams rejects anything in auth_value_env
+--   that is not a ${VAR} reference, so a token cannot be pasted into this
+--   file by accident either.
 --
 -- Everything lands as status='draft'. Nothing is served until someone opens
 -- it in the API Studio, tests it against the live supplier and publishes it.

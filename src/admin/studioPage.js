@@ -195,12 +195,18 @@ function render({ admin, bootstrap, flash }) {
             </select></div>
           <div class="f" id="wrapAuthName"><label for="upAuthName">Header / parameter name</label>
             <input id="upAuthName" placeholder="x-api-key" spellcheck="false"></div>
-          <div class="f" id="wrapAuthEnv"><label for="upAuthEnv">Credential variable</label>
+          <div class="f" id="wrapAuthSecret" style="grid-column:span 2">
+            <label for="upAuthSecret">Credential</label>
+            <input id="upAuthSecret" type="password" autocomplete="new-password"
+                   placeholder="paste the supplier's token" spellcheck="false">
+            <p class="hint" id="credStatus">Encrypted before it is stored, and never shown
+              again. <a href="#" id="envHelp">What protects it?</a></p></div>
+          <div class="f" id="wrapAuthUser"><label for="upAuthUser">Username</label>
+            <input id="upAuthUser" placeholder="for basic auth" spellcheck="false"></div>
+          <div class="f" id="wrapAuthEnv"><label for="upAuthEnv">Or: variable name</label>
             <input id="upAuthEnv" placeholder="\${CMOTS_API_TOKEN}" spellcheck="false">
-            <p class="hint">The NAME of an environment variable, not the token.
-              <a href="#" id="envHelp">Why?</a></p></div>
-          <div class="f" id="wrapAuthUser"><label for="upAuthUser">Username variable</label>
-            <input id="upAuthUser" placeholder="\${SUPPLIER_USER}" spellcheck="false"></div>
+            <p class="hint">Leave the credential blank to keep using an environment
+              variable instead. The internal APIs still do.</p></div>
         </div>
 
         <div class="flash err hidden" id="envWarn" style="margin:14px 0 0"></div>

@@ -55,18 +55,43 @@ async function categories(application = null) {
   return r?.rows || [];
 }
 
+/**
+ * Upstreams, with the STATUS of each credential — never the credential.
+ *
+ * The hint and the key id come from upstream_secrets; the ciphertext is not
+ * selected at all, so there is nothing here that could be serialised into a
+ * page by accident.
+ */
 async function upstreams(application = null) {
   const r = await db.query(
-    `SELECT name, application, display_name, vendor_name, base_url, timeout_ms,
-            auth_type, auth_name, auth_value_env, auth_user_env, enabled, health_path,
-            last_test_at, last_test_status, last_test_ms,
-            (SELECT count(*) FROM gateway.endpoints e WHERE e.upstream = u.name) AS endpoint_count
+    `SELECT u.name, u.application, u.display_name, u.vendor_name, u.base_url, u.timeout_ms,
+            u.auth_type, u.auth_name, u.auth_value_env, u.auth_user_env, u.auth_source,
+            u.enabled, u.health_path, u.last_test_at, u.last_test_status, u.last_test_ms,
+            (SELECT count(*) FROM gateway.endpoints e WHERE e.upstream = u.name) AS endpoint_count,
+            (s.upstream IS NOT NULL) AS secret_stored,
+            s.hint   AS secret_hint,
+            s.key_id AS secret_key_id,
+            s.set_at AS secret_set_at,
+            s.set_by AS secret_set_by
        FROM gateway.upstreams u
-      WHERE ($1::text IS NULL OR application = $1)
-      ORDER BY display_name NULLS LAST, name`,
+       LEFT JOIN gateway.upstream_secrets s
+              ON s.upstream = u.name AND s.slot = 'value'
+      WHERE ($1::text IS NULL OR u.application = $1)
+      ORDER BY u.display_name NULLS LAST, u.name`,
     [application]
   );
-  return r?.rows || [];
+  return (r?.rows || []).map((row) => ({
+    ...row,
+    credential: row.secret_stored
+      ? {
+          stored: true,
+          hint: row.secret_hint ? `••••${row.secret_hint}` : '••••',
+          keyId: row.secret_key_id,
+          setAt: row.secret_set_at,
+          setBy: row.secret_set_by,
+        }
+      : { stored: false },
+  }));
 }
 
 async function endpoints(application = null, { status = null, q = null } = {}) {

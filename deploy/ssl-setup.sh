@@ -74,11 +74,16 @@ say "What is on this machine already"
 note "sites enabled:"
 ls -1 /etc/nginx/sites-enabled/ 2>/dev/null | sed 's/^/      /' || true
 note "server names other sites claim:"
-grep -rhE '^\s*server_name' /etc/nginx/sites-enabled/ 2>/dev/null \
-  | sed 's/^\s*/      /' | sort -u || true
+# -R, not -r: every entry in sites-enabled is a SYMLINK, and grep -r does not
+# follow symlinks it finds while recursing. With -r this listing and both
+# collision checks below silently read nothing and always passed.
+# No ^ anchor: a server_name can share a line with other directives, and a
+# listing that misses it is worse than no listing.
+grep -RhoE 'server_name[^;]*;' /etc/nginx/sites-enabled/ 2>/dev/null \
+  | sed 's/^/      /' | sort -u || note "      (none found)"
 
 # A second block claiming our name would make the outcome depend on file order.
-CLAIMS="$(grep -rlE "^\s*server_name.*\b${DOMAIN//./\\.}\b" /etc/nginx/sites-enabled/ 2>/dev/null \
+CLAIMS="$(grep -RlE "server_name[^;]*\b${DOMAIN//./\\.}\b" /etc/nginx/sites-enabled/ 2>/dev/null \
           | grep -v "/$SITE_NAME\$" || true)"
 [ -z "$CLAIMS" ] || fail "another site also claims $DOMAIN:
      $CLAIMS
@@ -88,7 +93,7 @@ CLAIMS="$(grep -rlE "^\s*server_name.*\b${DOMAIN//./\\.}\b" /etc/nginx/sites-ena
 # Zone and upstream names are global to the http{} block; a collision is a
 # hard nginx failure, and it is better to know now than after the reload.
 for n in vendor_ip vendor_conn admin_ip vendor_wrapper pravah_app_boot; do
-  HIT="$(grep -rlE "(zone=$n[: ]|upstream\s+$n\s)" /etc/nginx/sites-enabled/ /etc/nginx/conf.d/ 2>/dev/null \
+  HIT="$(grep -RlE "(zone=$n[: ]|upstream\s+$n\s)" /etc/nginx/sites-enabled/ /etc/nginx/conf.d/ 2>/dev/null \
          | grep -v "/$SITE_NAME\$" || true)"
   [ -z "$HIT" ] || fail "the name '$n' is already used by: $HIT
      Rename it in deploy/nginx.conf before continuing."
@@ -132,15 +137,55 @@ systemctl reload nginx 2>/dev/null || systemctl start nginx
 check_others
 
 echo ok > "$WEBROOT/.well-known/acme-challenge/selftest"
-if curl -fsS --max-time 10 "http://$DOMAIN/.well-known/acme-challenge/selftest" 2>/dev/null | grep -q ok; then
-  note "the challenge path is reachable from the internet"
-  rm -f "$WEBROOT/.well-known/acme-challenge/selftest"
+
+# Two separate questions, and conflating them sends people to the firewall
+# when the problem is nginx, or to nginx when the problem is the firewall.
+#
+#   (a) does OUR nginx serve the challenge path at all?  Asked over loopback
+#       with the right Host header. Nothing leaves the machine.
+#   (b) can the INTERNET reach it?  Asked over the public name — which, from
+#       the VM itself, goes out and comes back in. Azure commonly has no NAT
+#       loopback, so a failure here is NOT proof that the port is shut.
+LOCAL_OK=no
+if curl -fsS --max-time 5 -H "Host: $DOMAIN" \
+     "http://127.0.0.1/.well-known/acme-challenge/selftest" 2>/dev/null | grep -q ok; then
+  LOCAL_OK=yes
+  note "nginx serves the challenge path correctly (checked over loopback)"
 else
   rm -f "$WEBROOT/.well-known/acme-challenge/selftest"
-  fail "http://$DOMAIN/.well-known/acme-challenge/ is not reachable from outside.
-     Port 80 must be open to Any in the Azure NSG — Let's Encrypt validates
-     from many addresses and cannot be restricted to a known one.
-     Our nginx site is in place and harmless; fix the NSG and run this again."
+  fail "nginx is not serving http://$DOMAIN/.well-known/acme-challenge/ even locally.
+     This is our configuration, not the firewall. Check:
+       sudo nginx -T | grep -A5 'server_name $DOMAIN'
+       ls -la $WEBROOT/.well-known/acme-challenge/"
+fi
+
+if curl -fsS --max-time 10 "http://$DOMAIN/.well-known/acme-challenge/selftest" 2>/dev/null | grep -q ok; then
+  note "and it is reachable over the public name"
+  rm -f "$WEBROOT/.well-known/acme-challenge/selftest"
+elif [ "${SKIP_REACHABILITY_CHECK:-}" = "true" ]; then
+  note "could not reach it by public name from this machine — continuing because"
+  note "SKIP_REACHABILITY_CHECK=true. If port 80 really is shut, certbot will say so."
+  rm -f "$WEBROOT/.well-known/acme-challenge/selftest"
+else
+  note ""
+  note "nginx is serving it, but this machine could not fetch it by its public name."
+  note "That means ONE of two things, and they need different fixes:"
+  note ""
+  note "  1. Port 80 is not open to Any in the Azure NSG. Let's Encrypt validates"
+  note "     from many addresses, so it cannot be restricted to a known IP."
+  note ""
+  note "  2. The port IS open, but this VM cannot reach its own public IP —"
+  note "     Azure usually has no NAT loopback. In that case the outside world"
+  note "     can reach you fine and only this test is wrong."
+  note ""
+  note "Tell them apart by fetching this from somewhere else (your laptop):"
+  note ""
+  note "    curl http://$DOMAIN/.well-known/acme-challenge/selftest"
+  note ""
+  note "The file is being LEFT IN PLACE so you can. If that prints 'ok', it is"
+  note "case 2 — re-run with:   sudo SKIP_REACHABILITY_CHECK=true bash $0"
+  note "If it times out or is refused, it is case 1 — open port 80 and re-run."
+  exit 1
 fi
 
 # ---------------------------------------------------------------------------

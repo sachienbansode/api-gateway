@@ -15,6 +15,7 @@ const { makeAuthMiddleware } = require('./middleware/auth');
 
 const db = require('./db/pool');
 const adminDb = require('./db/adminPool');
+const catalog = require('./db/repos/catalog');
 const { VendorStore } = require('./db/repos/vendors');
 const { AuditWriter } = require('./db/repos/audit');
 
@@ -190,19 +191,37 @@ function createApp({ logger, config } = {}) {
 
   async function reloadCatalog() {
     if (!db.isEnabled()) return { changed: false, reason: 'no database' };
-    const catalog = require('./db/repos/catalog');
     const merged = await catalog.mergeWithFiles(configLoader.rawSources());
     const next = configLoader.loadFrom(merged);
+
+    // Credentials sealed in the database go in AFTER validation, never before:
+    // the loader interpolates ${NAME} against the environment, and a token is
+    // not something to run through a string rewriter.
+    const vaultFailures = await catalog.applyVaultSecrets(
+      next, merged._vaultUpstreams || [], logger
+    );
+
     // One client throughout, with its upstream set swapped in place, so the
     // health screen and the request path never disagree about breaker state.
     client.replace(next.upstreams);
     live.cfg = next;
     live.router = buildRouter({ endpoints: next.endpoints, client, logger, observer, audit });
+    if (merged._shadowed && merged._shadowed.length) {
+      logger.warn(
+        { endpoints: merged._shadowed },
+        'these endpoints are defined in BOTH config/endpoints.yaml and the database — ' +
+          'the database definition is the one being served. Delete the YAML entry.'
+      );
+    }
     logger.info(
-      { endpoints: next.endpoints.length, upstreams: Object.keys(next.upstreams).length },
+      {
+        endpoints: next.endpoints.length,
+        upstreams: Object.keys(next.upstreams).length,
+        sealedCredentials: (merged._vaultUpstreams || []).length - vaultFailures.length,
+      },
       'catalogue reloaded'
     );
-    return { changed: true, endpoints: next.endpoints.length };
+    return { changed: true, endpoints: next.endpoints.length, vaultFailures };
   }
 
   app.use((req, res, next) => live.router(req, res, next));

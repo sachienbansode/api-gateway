@@ -1,6 +1,7 @@
 'use strict';
 
 const db = require('../pool');
+const secretRepo = require('./secrets');
 
 /**
  * The API catalogue: upstreams, endpoints, per-vendor endpoint grants and IP
@@ -100,20 +101,78 @@ async function ipMap() {
  */
 const scopeFor = (endpointName) => `ep:${endpointName}`;
 
+/**
+ * A credential sealed in the database is NOT put into the manifest here.
+ *
+ * The manifest goes through config interpolation, which resolves ${NAME}
+ * against the environment — and a token that happened to contain `${` would
+ * be mangled, or worse, would resolve to something else. So vault upstreams
+ * carry this placeholder through validation, and the real value is injected
+ * afterwards by applyVaultSecrets(). The secret therefore never passes through
+ * a string-rewriting step.
+ */
+const VAULT_PLACEHOLDER = '__vault__';
+
 function upstreamToManifest(row) {
   const auth = { type: row.auth_type };
-  if (row.auth_type === 'bearer') auth.token = row.auth_value_env;
+  const vault = row.auth_source === 'vault';
+  const main = vault ? VAULT_PLACEHOLDER : row.auth_value_env;
+  const user = vault ? VAULT_PLACEHOLDER : row.auth_user_env;
+
+  if (row.auth_type === 'bearer') auth.token = main;
   else if (row.auth_type === 'header') {
     auth.name = row.auth_name;
-    auth.value = row.auth_value_env;
+    auth.value = main;
   } else if (row.auth_type === 'query') {
     auth.name = row.auth_name;
-    auth.value = row.auth_value_env;
+    auth.value = main;
   } else if (row.auth_type === 'basic') {
-    auth.username = row.auth_user_env;
-    auth.password = row.auth_value_env;
+    auth.username = user;
+    auth.password = main;
   }
   return { baseUrl: row.base_url, timeoutMs: row.timeout_ms, auth };
+}
+
+/**
+ * Put the decrypted credentials into an ALREADY VALIDATED config.
+ *
+ * Called after config.loadFrom(), never before. Mutates in place because the
+ * validated objects are what the request path holds a reference to.
+ *
+ * A failure to decrypt one upstream disables that upstream rather than taking
+ * the reload down: the rest of the catalogue has nothing to do with it. The
+ * returned `failed` list is for the caller to log — loudly.
+ */
+async function applyVaultSecrets(cfg, vaultUpstreams, logger) {
+  const failed = [];
+  for (const name of vaultUpstreams) {
+    const up = cfg.upstreams && cfg.upstreams[name];
+    if (!up || !up.auth) continue;
+    try {
+      const secrets = await secretRepo.resolveAll(name);
+      const value = secrets.value;
+      if (!value) throw new Error('no credential is stored for this upstream');
+      if (up.auth.type === 'bearer') up.auth.token = value;
+      else if (up.auth.type === 'header' || up.auth.type === 'query') up.auth.value = value;
+      else if (up.auth.type === 'basic') {
+        up.auth.password = value;
+        if (secrets.username) up.auth.username = secrets.username;
+      }
+    } catch (err) {
+      failed.push({ upstream: name, error: err.message });
+      // Leaving the placeholder in place would send the literal string
+      // "__vault__" to the supplier as a bearer token. Remove the upstream
+      // instead, which makes its endpoints unroutable — visibly broken beats
+      // quietly authenticating as nobody.
+      delete cfg.upstreams[name];
+      cfg.endpoints = cfg.endpoints.filter((e) => e.upstream !== name);
+      logger?.error?.(
+        { upstream: name, err: err.message },
+        'could not decrypt this upstream credential — its endpoints are not being served'
+      );
+    }
+  }
+  return failed;
 }
 
 function endpointToManifest(row) {
@@ -158,7 +217,12 @@ async function toManifest() {
   ]);
 
   const upstreams = {};
-  for (const u of ups) if (u.enabled) upstreams[u.name] = upstreamToManifest(u);
+  const vaultUpstreams = [];
+  for (const u of ups) {
+    if (!u.enabled) continue;
+    upstreams[u.name] = upstreamToManifest(u);
+    if (u.auth_source === 'vault' && u.auth_type !== 'none') vaultUpstreams.push(u.name);
+  }
 
   // `status` arrived with migration 003. A draft is an endpoint someone is
   // still building in the Studio; it must not be routed. Rows that predate the
@@ -170,7 +234,10 @@ async function toManifest() {
   const endpoints = live.map(endpointToManifest);
   const liveNames = new Set(live.map((e) => e.name));
 
-  return { upstreams, endpoints, vendorScopes: vmap, liveEndpointNames: liveNames, scopeFor };
+  return {
+    upstreams, endpoints, vendorScopes: vmap, liveEndpointNames: liveNames,
+    vaultUpstreams, scopeFor,
+  };
 }
 
 /**
@@ -198,8 +265,9 @@ async function mergeWithFiles(files) {
     upstreams: { upstreams },
     endpoints: { endpoints: [...kept, ...dbm.endpoints] },
     vendors: files.vendors || {},
-    // Not read by the validator; carried so the caller can log it.
+    // Not read by the validator; carried so the caller can act on them.
     _shadowed: shadowed,
+    _vaultUpstreams: dbm.vaultUpstreams,
   };
 }
 
@@ -370,6 +438,8 @@ module.exports = {
   ipMap,
   toManifest,
   mergeWithFiles,
+  applyVaultSecrets,
+  VAULT_PLACEHOLDER,
   upsertUpstream,
   deleteUpstream,
   upsertEndpoint,

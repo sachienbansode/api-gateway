@@ -186,7 +186,11 @@
     $('upAuthType').value = u.auth_type || 'none';
     $('upAuthName').value = u.auth_name || '';
     $('upAuthEnv').value = u.auth_value_env || '';
-    $('upAuthUser').value = u.auth_user_env || '';
+    $('upAuthUser').value = '';
+    // Never prefilled, and never arrives from the server. An empty box on a
+    // supplier that already has a credential means "leave it alone".
+    $('upAuthSecret').value = '';
+    renderCredStatus(u.credential || null);
     authVisibility();
     var st = $('s1status');
     st.innerHTML = '';
@@ -202,7 +206,32 @@
     var t = $('upAuthType').value;
     show($('wrapAuthName'), t === 'header' || t === 'query');
     show($('wrapAuthEnv'), t !== 'none');
+    show($('wrapAuthSecret'), t !== 'none');
     show($('wrapAuthUser'), t === 'basic');
+  }
+
+  /** What the console is allowed to say about a credential. */
+  function renderCredStatus(c) {
+    var n = $('credStatus');
+    if (!n) return;
+    if (c && c.stored) {
+      n.innerHTML = '';
+      n.appendChild(badge('ok', 'stored ' + (c.hint || '••••')));
+      if (c.keyId) n.appendChild(badge('mute', 'key ' + c.keyId));
+      var who = c.setBy ? ' by ' + c.setBy : '';
+      n.appendChild(document.createTextNode(
+        '  Encrypted' + (c.setAt ? ' ' + fmtWhen(c.setAt) : '') + who +
+        '. Leave the box empty to keep it; type a new one to replace it.'));
+    } else {
+      n.textContent = 'Encrypted before it is stored, and never shown again.';
+    }
+  }
+  function fmtWhen(d) {
+    try {
+      var x = new Date(d);
+      var m = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][x.getMonth()];
+      return x.getDate() + '-' + m + '-' + x.getFullYear();
+    } catch (e) { return ''; }
   }
   $('upAuthType').addEventListener('change', authVisibility);
 
@@ -219,10 +248,11 @@
 
   $('envHelp').addEventListener('click', function (e) {
     e.preventDefault();
-    alertBox('The database is backed up, replicated and read by more people than you think. ' +
-      'A token in it is a token you cannot confidently rotate. So the row holds the NAME of ' +
-      'an environment variable — ${CMOTS_API_TOKEN} — and the value lives in ' +
-      '/etc/api-gateway/env on the server. The test button below resolves it there.');
+    alertBox('The token is sealed with AES-256-GCM before it reaches a column, and the key ' +
+      'is NOT in the database — it is GW_SECRET_KEY in /etc/api-gateway/env. That separation ' +
+      'is the whole mechanism: a backup, a replica or a dump decrypts to nothing on its own. ' +
+      'Each row records which key sealed it, so keys can be rotated without an outage. The ' +
+      'token is never sent back to this page, and never appears in a log.');
   });
 
   function collectUpstream() {
@@ -236,7 +266,10 @@
       authType: $('upAuthType').value,
       authName: $('upAuthName').value.trim() || null,
       authValueEnv: $('upAuthEnv').value.trim() || null,
-      authUserEnv: $('upAuthUser').value.trim() || null,
+      // Sent only when the operator typed something. An empty box leaves the
+      // stored credential exactly as it was.
+      authSecret: $('upAuthSecret').value || undefined,
+      authUser: $('upAuthUser').value.trim() || undefined,
       healthPath: $('testPath').value.trim() || null
     };
   }
@@ -250,7 +283,11 @@
       var i = -1;
       boot.upstreams.forEach(function (u, ix) { if (u.name === j.upstream.name) i = ix; });
       if (i >= 0) boot.upstreams[i] = j.upstream; else boot.upstreams.push(j.upstream);
+      if (j.credential) S.upstream.credential = j.credential;
       renderUpstream();
+      // The box is cleared on purpose: the value is gone from this page now,
+      // and leaving it filled would suggest it could be read back.
+      $('upAuthSecret').value = '';
       msg('s1msg', 'Saved. ' + (j.envHint || ''), false);
       $('step1').classList.add('ok');
     }).catch(function (e) { msg('s1msg', e.message, true); })

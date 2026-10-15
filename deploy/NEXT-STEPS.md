@@ -49,7 +49,8 @@ Run these in pgAdmin against the **`gateway`** database, autocommit on.
 |---|---|---|
 | 1 | `db/migrations/002_catalog.sql` | upstreams, endpoints, per-vendor grants, per-vendor IP allowlists |
 | 2 | `db/migrations/003_studio.sql` | applications, types, categories, parameters, field catalogue, test log |
-| 3 | `db/seed/001_cmots_assignment.sql` | assignment 1 — the CMOTS catalogue |
+| 3 | `db/migrations/004_upstream_secrets.sql` | encrypted supplier credentials, the status view, the secret audit |
+| 4 | `db/seed/001_cmots_assignment.sql` | assignment 1 — the CMOTS catalogue |
 
 All three are idempotent; running one twice changes nothing the second time.
 
@@ -64,14 +65,35 @@ The seed ends with two SELECTs that print what landed. Expect:
  fields      | 938
 ```
 
-Then add the CMOTS token to the env file — it is deliberately **not** in any
-script:
+---
+
+## 4a. The encryption key — once, before any token is entered
+
+Supplier credentials are stored in the database, sealed with AES-256-GCM. The
+key is **not** in the database; it lives in the env file, and that separation is
+the entire mechanism. A backup, a replica, or a dump handed to a DBA decrypts
+to nothing on its own.
 
 ```bash
-sudo sh -c 'echo "CMOTS_API_TOKEN=<the real token>" >> /etc/api-gateway/env' && \
+KEY="v1:$(node -e "console.log(require('crypto').randomBytes(32).toString('base64'))")" && \
+sudo sh -c "echo 'GW_SECRET_KEY=$KEY' >> /etc/api-gateway/env" && \
 sudo chmod 640 /etc/api-gateway/env && \
-cd /var/apps/api-gateway && pm2 delete api-gateway ; pm2 start ecosystem.config.js
+unset KEY && \
+cd /var/apps/api-gateway && pm2 delete api-gateway && pm2 start ecosystem.config.js
 ```
+
+**Back this key up somewhere other than that VM**, in whatever your team uses
+for secrets. If the VM is lost and the key with it, every stored credential has
+to be re-entered by hand — 68 endpoints' worth of supplier relationships.
+
+Then put the CMOTS token in through the UI, not the shell: API Studio → step 1 →
+**Credential** → Save supplier API. It is encrypted before it reaches a column,
+never written to a log, and never sent back to the browser. The console will
+show `stored ••••7b21 · key v1` and who set it.
+
+The `${CMOTS_API_TOKEN}` environment variable still works as a fallback if you
+would rather do it the old way — the internal upstreams still use that path —
+but you do not need both.
 
 Everything lands as a **draft**. Nothing is served until someone opens it in
 the Studio, tests it against the real CMOTS and presses Publish.
@@ -143,5 +165,9 @@ without affecting another.
 - **Vendor scopes for the catalogue.** Publishing an endpoint does not grant
   anybody access to it; the Vendors screen still lists only the YAML scopes.
   Picking endpoints per vendor from a list is the next screen to build.
-- **`.github/workflows/ci.yml`** is still missing — the tests (92 of them)
+- **`.github/workflows/ci.yml`** is still missing — the tests (109 of them)
   only run when someone runs them.
+- **Key rotation is built but has no button yet.** `POST /admin/api/credentials/rotate`
+  re-seals every credential onto the newest key in `GW_SECRET_KEY`; adding a
+  second key at the front of that variable and calling it is the whole
+  procedure. Worth putting on a screen before anyone needs it in a hurry.
