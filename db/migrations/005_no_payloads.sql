@@ -47,24 +47,24 @@ SET search_path TO gateway, public;
 
 -- The field paths the test saw, and their types. "data[].co_code: number" is
 -- a statement about the API; "6" is a statement about Reliance Industries.
-ALTER TABLE connection_tests ADD COLUMN IF NOT EXISTS response_shape JSONB;
-ALTER TABLE connection_tests ADD COLUMN IF NOT EXISTS withheld_count INTEGER;
+ALTER TABLE gateway.connection_tests ADD COLUMN IF NOT EXISTS response_shape JSONB;
+ALTER TABLE gateway.connection_tests ADD COLUMN IF NOT EXISTS withheld_count INTEGER;
 
-COMMENT ON COLUMN connection_tests.response_shape IS
+COMMENT ON COLUMN gateway.connection_tests.response_shape IS
   'Field paths and their types — never values. {"data[].co_code":"number",...}';
 
 -- Drop what the old behaviour already captured. This is deliberate data loss:
 -- the rows should not have existed.
-UPDATE connection_tests SET response_sample = NULL WHERE response_sample IS NOT NULL;
+UPDATE gateway.connection_tests SET response_sample = NULL WHERE response_sample IS NOT NULL;
 
-COMMENT ON COLUMN connection_tests.response_sample IS
+COMMENT ON COLUMN gateway.connection_tests.response_sample IS
   'DEPRECATED and normally NULL. Kept only for a deployment that explicitly '
   'sets STUDIO_KEEP_TEST_SAMPLES=true, which it should not. Supplier data '
   'belongs in the datalake, not here.';
 
 -- A test record is a diagnostic, not an archive. Six months is generous for
 -- "did this endpoint work when we published it".
-CREATE INDEX IF NOT EXISTS connection_tests_purge_idx ON connection_tests (occurred_at);
+CREATE INDEX IF NOT EXISTS connection_tests_purge_idx ON gateway.connection_tests (occurred_at);
 
 -- ---------------------------------------------------------------------------
 -- Purge, for both tables.
@@ -108,7 +108,7 @@ COMMENT ON FUNCTION purge_payloads IS
 -- A standing check, so "we hold no data" is something you can verify rather
 -- than something you remember being told.
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE VIEW payload_check AS
+CREATE OR REPLACE VIEW gateway.payload_check AS
 SELECT 'connection_tests.response_sample' AS location,
        count(*) FILTER (WHERE response_sample IS NOT NULL) AS rows_holding_payload,
        'should be 0 — supplier data belongs in the datalake'::text AS expectation
@@ -127,5 +127,5 @@ SELECT 'observed_fields',
        0,
        'field names only, never values';
 
-COMMENT ON VIEW payload_check IS
+COMMENT ON VIEW gateway.payload_check IS
   'Is any supplier data sitting in this database? Expect 0 on the first row.';

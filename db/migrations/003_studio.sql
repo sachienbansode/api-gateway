@@ -36,7 +36,7 @@ SET search_path TO gateway, public;
 -- ---------------------------------------------------------------------------
 -- Applications — the top of the tree. "Select Application" in the wizard.
 -- ---------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS applications (
+CREATE TABLE IF NOT EXISTS gateway.applications (
     code        TEXT PRIMARY KEY CHECK (code ~ '^[a-z0-9][a-z0-9_]*$'),
     name        TEXT NOT NULL,
     description TEXT,
@@ -50,7 +50,7 @@ CREATE TABLE IF NOT EXISTS applications (
 -- ---------------------------------------------------------------------------
 -- API type — admin-configurable dropdown, step 2.
 -- ---------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS api_types (
+CREATE TABLE IF NOT EXISTS gateway.api_types (
     code        TEXT PRIMARY KEY CHECK (code ~ '^[a-z0-9][a-z0-9_]*$'),
     label       TEXT NOT NULL,
     description TEXT,
@@ -62,9 +62,9 @@ CREATE TABLE IF NOT EXISTS api_types (
 -- Category — admin-configurable dropdown, step 2. Scoped to an application so
 -- "Mutual Fund (EOD)" does not turn up in an unrelated product's list.
 -- ---------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS api_categories (
+CREATE TABLE IF NOT EXISTS gateway.api_categories (
     code        TEXT NOT NULL CHECK (code ~ '^[a-z0-9][a-z0-9_]*$'),
-    application TEXT NOT NULL REFERENCES applications(code) ON DELETE CASCADE,
+    application TEXT NOT NULL REFERENCES gateway.applications(code) ON DELETE CASCADE,
     label       TEXT NOT NULL,
     description TEXT,
     enabled     BOOLEAN NOT NULL DEFAULT TRUE,
@@ -75,30 +75,30 @@ CREATE TABLE IF NOT EXISTS api_categories (
 -- ---------------------------------------------------------------------------
 -- Columns the wizard adds to what 002 created.
 -- ---------------------------------------------------------------------------
-ALTER TABLE upstreams ADD COLUMN IF NOT EXISTS application  TEXT REFERENCES applications(code);
-ALTER TABLE upstreams ADD COLUMN IF NOT EXISTS display_name TEXT;
-ALTER TABLE upstreams ADD COLUMN IF NOT EXISTS vendor_name  TEXT;   -- who supplies it
-ALTER TABLE upstreams ADD COLUMN IF NOT EXISTS health_path  TEXT;   -- cheap GET for step 1
-ALTER TABLE upstreams ADD COLUMN IF NOT EXISTS last_test_at     TIMESTAMPTZ;
-ALTER TABLE upstreams ADD COLUMN IF NOT EXISTS last_test_status INTEGER;
-ALTER TABLE upstreams ADD COLUMN IF NOT EXISTS last_test_ms     INTEGER;
+ALTER TABLE gateway.upstreams ADD COLUMN IF NOT EXISTS application  TEXT REFERENCES gateway.applications(code);
+ALTER TABLE gateway.upstreams ADD COLUMN IF NOT EXISTS display_name TEXT;
+ALTER TABLE gateway.upstreams ADD COLUMN IF NOT EXISTS vendor_name  TEXT;   -- who supplies it
+ALTER TABLE gateway.upstreams ADD COLUMN IF NOT EXISTS health_path  TEXT;   -- cheap GET for step 1
+ALTER TABLE gateway.upstreams ADD COLUMN IF NOT EXISTS last_test_at     TIMESTAMPTZ;
+ALTER TABLE gateway.upstreams ADD COLUMN IF NOT EXISTS last_test_status INTEGER;
+ALTER TABLE gateway.upstreams ADD COLUMN IF NOT EXISTS last_test_ms     INTEGER;
 
-ALTER TABLE endpoints ADD COLUMN IF NOT EXISTS application  TEXT REFERENCES applications(code);
-ALTER TABLE endpoints ADD COLUMN IF NOT EXISTS display_name TEXT;
-ALTER TABLE endpoints ADD COLUMN IF NOT EXISTS category     TEXT;
-ALTER TABLE endpoints ADD COLUMN IF NOT EXISTS api_type     TEXT REFERENCES api_types(code);
-ALTER TABLE endpoints ADD COLUMN IF NOT EXISTS description  TEXT;
-ALTER TABLE endpoints ADD COLUMN IF NOT EXISTS frequency    TEXT;   -- EOD, intraday …
-ALTER TABLE endpoints ADD COLUMN IF NOT EXISTS refresh_at   TEXT;   -- "23:30:00"
-ALTER TABLE endpoints ADD COLUMN IF NOT EXISTS sample_path  TEXT;   -- a real URL that works
+ALTER TABLE gateway.endpoints ADD COLUMN IF NOT EXISTS application  TEXT REFERENCES gateway.applications(code);
+ALTER TABLE gateway.endpoints ADD COLUMN IF NOT EXISTS display_name TEXT;
+ALTER TABLE gateway.endpoints ADD COLUMN IF NOT EXISTS category     TEXT;
+ALTER TABLE gateway.endpoints ADD COLUMN IF NOT EXISTS api_type     TEXT REFERENCES gateway.api_types(code);
+ALTER TABLE gateway.endpoints ADD COLUMN IF NOT EXISTS description  TEXT;
+ALTER TABLE gateway.endpoints ADD COLUMN IF NOT EXISTS frequency    TEXT;   -- EOD, intraday …
+ALTER TABLE gateway.endpoints ADD COLUMN IF NOT EXISTS refresh_at   TEXT;   -- "23:30:00"
+ALTER TABLE gateway.endpoints ADD COLUMN IF NOT EXISTS sample_path  TEXT;   -- a real URL that works
 -- Added with DEFAULT 'live', then the default is changed to 'draft': any
 -- endpoint that already existed was being served before this migration and
 -- must keep being served, while everything created from here on starts as a
 -- draft.
-ALTER TABLE endpoints ADD COLUMN IF NOT EXISTS status       TEXT NOT NULL DEFAULT 'live';
-ALTER TABLE endpoints ALTER COLUMN status SET DEFAULT 'draft';
-ALTER TABLE endpoints ADD COLUMN IF NOT EXISTS last_test_at     TIMESTAMPTZ;
-ALTER TABLE endpoints ADD COLUMN IF NOT EXISTS last_test_status INTEGER;
+ALTER TABLE gateway.endpoints ADD COLUMN IF NOT EXISTS status       TEXT NOT NULL DEFAULT 'live';
+ALTER TABLE gateway.endpoints ALTER COLUMN status SET DEFAULT 'draft';
+ALTER TABLE gateway.endpoints ADD COLUMN IF NOT EXISTS last_test_at     TIMESTAMPTZ;
+ALTER TABLE gateway.endpoints ADD COLUMN IF NOT EXISTS last_test_status INTEGER;
 
 -- A draft is an endpoint someone is still building in the wizard; it is not
 -- served. Only 'live' is routed. Separating them means a half-finished
@@ -106,18 +106,18 @@ ALTER TABLE endpoints ADD COLUMN IF NOT EXISTS last_test_status INTEGER;
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'endpoints_status_chk') THEN
-    ALTER TABLE endpoints ADD CONSTRAINT endpoints_status_chk
+    ALTER TABLE gateway.endpoints ADD CONSTRAINT endpoints_status_chk
       CHECK (status IN ('draft','live','retired'));
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'endpoints_category_fk') THEN
-    ALTER TABLE endpoints ADD CONSTRAINT endpoints_category_fk
-      FOREIGN KEY (application, category) REFERENCES api_categories(application, code);
+    ALTER TABLE gateway.endpoints ADD CONSTRAINT endpoints_category_fk
+      FOREIGN KEY (application, category) REFERENCES gateway.api_categories(application, code);
   END IF;
 END $$;
 
-CREATE INDEX IF NOT EXISTS endpoints_app_idx      ON endpoints (application, category);
-CREATE INDEX IF NOT EXISTS endpoints_status_idx   ON endpoints (status);
-CREATE INDEX IF NOT EXISTS upstreams_app_idx      ON upstreams (application);
+CREATE INDEX IF NOT EXISTS endpoints_app_idx      ON gateway.endpoints (application, category);
+CREATE INDEX IF NOT EXISTS endpoints_status_idx   ON gateway.endpoints (status);
+CREATE INDEX IF NOT EXISTS upstreams_app_idx      ON gateway.upstreams (application);
 
 -- ---------------------------------------------------------------------------
 -- Request parameters — step 3, the "+/- request parameters" half.
@@ -132,8 +132,8 @@ CREATE INDEX IF NOT EXISTS upstreams_app_idx      ON upstreams (application);
 -- `forward_as` the name the UPSTREAM expects, when it differs from ours. This
 --              is the rename half of the transformation.
 -- ---------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS endpoint_params (
-    endpoint    TEXT NOT NULL REFERENCES endpoints(name) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS gateway.endpoint_params (
+    endpoint    TEXT NOT NULL REFERENCES gateway.endpoints(name) ON DELETE CASCADE,
     name        TEXT NOT NULL,
     location    TEXT NOT NULL DEFAULT 'query'
                 CHECK (location IN ('path','query','header','body')),
@@ -161,7 +161,7 @@ CREATE TABLE IF NOT EXISTS endpoint_params (
       CHECK (location <> 'path' OR required = TRUE OR source <> 'vendor')
 );
 
-CREATE INDEX IF NOT EXISTS endpoint_params_ep_idx ON endpoint_params (endpoint);
+CREATE INDEX IF NOT EXISTS endpoint_params_ep_idx ON gateway.endpoint_params (endpoint);
 
 -- ---------------------------------------------------------------------------
 -- Response fields — step 3, the "+/- response parameters" half.
@@ -176,8 +176,8 @@ CREATE INDEX IF NOT EXISTS endpoint_params_ep_idx ON endpoint_params (endpoint);
 -- nobody has decided about yet — the thing that tells you an upstream started
 -- returning a PAN number last Tuesday.
 -- ---------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS endpoint_fields (
-    endpoint    TEXT NOT NULL REFERENCES endpoints(name) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS gateway.endpoint_fields (
+    endpoint    TEXT NOT NULL REFERENCES gateway.endpoints(name) ON DELETE CASCADE,
     path        TEXT NOT NULL,                 -- "data.co_code", dotted
     data_type   TEXT,                          -- as documented by the supplier
     description TEXT,
@@ -190,19 +190,19 @@ CREATE TABLE IF NOT EXISTS endpoint_fields (
     PRIMARY KEY (endpoint, path)
 );
 
-CREATE INDEX IF NOT EXISTS endpoint_fields_ep_idx  ON endpoint_fields (endpoint);
-CREATE INDEX IF NOT EXISTS endpoint_fields_new_idx ON endpoint_fields (endpoint)
+CREATE INDEX IF NOT EXISTS endpoint_fields_ep_idx  ON gateway.endpoint_fields (endpoint);
+CREATE INDEX IF NOT EXISTS endpoint_fields_new_idx ON gateway.endpoint_fields (endpoint)
   WHERE discovered AND NOT exposed;
 
 -- A draft may have no fields chosen yet — that is what a draft IS. The
 -- constraint from 002 forbade it outright, which made it impossible to create
 -- an endpoint in step 2 and tick its fields in step 3. Re-state it so the rule
 -- bites where it matters: nothing goes LIVE on an empty whitelist.
-ALTER TABLE endpoints DROP CONSTRAINT IF EXISTS whitelist_needs_fields;
+ALTER TABLE gateway.endpoints DROP CONSTRAINT IF EXISTS whitelist_needs_fields;
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'whitelist_needs_fields') THEN
-    ALTER TABLE endpoints ADD CONSTRAINT whitelist_needs_fields CHECK (
+    ALTER TABLE gateway.endpoints ADD CONSTRAINT whitelist_needs_fields CHECK (
       response_mode <> 'whitelist'
       OR status <> 'live'
       OR cardinality(response_fields) > 0
@@ -280,7 +280,7 @@ CREATE TRIGGER endpoint_fields_sync_del AFTER DELETE ON endpoint_fields
 -- fields we chose to expose. The raw upstream body is NOT stored: it is the
 -- thing we are protecting.
 -- ---------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS connection_tests (
+CREATE TABLE IF NOT EXISTS gateway.connection_tests (
     id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     occurred_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     kind        TEXT NOT NULL CHECK (kind IN ('upstream','endpoint')),
@@ -296,14 +296,14 @@ CREATE TABLE IF NOT EXISTS connection_tests (
     response_sample JSONB
 );
 
-CREATE INDEX IF NOT EXISTS connection_tests_time_idx ON connection_tests (occurred_at DESC);
-CREATE INDEX IF NOT EXISTS connection_tests_ep_idx   ON connection_tests (endpoint, occurred_at DESC);
+CREATE INDEX IF NOT EXISTS connection_tests_time_idx ON gateway.connection_tests (occurred_at DESC);
+CREATE INDEX IF NOT EXISTS connection_tests_ep_idx   ON gateway.connection_tests (endpoint, occurred_at DESC);
 
 -- ---------------------------------------------------------------------------
 -- Starter dropdown values. The console can add more; these make the wizard
 -- usable the minute the migration lands.
 -- ---------------------------------------------------------------------------
-INSERT INTO api_types (code, label, description, sort_order) VALUES
+INSERT INTO gateway.api_types (code, label, description, sort_order) VALUES
   ('master',      'Master / Reference', 'Slow-moving reference data — codes, names, mappings', 10),
   ('fundamental', 'Fundamental',        'Reported financials and ratios',                        20),
   ('market',      'Market Data',        'Prices, volumes, technical indicators',                 30),
