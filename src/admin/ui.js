@@ -109,6 +109,34 @@ aside nav a svg{width:15px;height:15px;flex:none;color:var(--ink3)}
 aside nav a .tag{margin-left:auto;font-size:8.5px;font-weight:700;letter-spacing:.5px;
   color:var(--ink3);background:var(--surface2);border:1px solid var(--border);
   padding:1px 5px;border-radius:3px}
+
+/* ---------- a nav group: Admin, with its three children ---------- */
+.navgrp-top{display:flex;align-items:center;gap:9px;width:100%;padding:8px 11px;
+  border-radius:var(--r);border:0;background:none;cursor:pointer;text-align:left;
+  color:var(--ink2);font:500 12.5px var(--sans);margin-bottom:1px}
+.navgrp-top:hover{background:var(--surface2);color:var(--ink)}
+.navgrp-top svg{width:15px;height:15px;flex:none;color:var(--ink3)}
+.navgrp-top .chev{margin-left:auto;width:12px;height:12px;transition:transform .16s ease}
+.navgrp.open>.navgrp-top .chev{transform:rotate(90deg)}
+.navgrp.open>.navgrp-top{color:var(--ink)}
+/* Closed by height rather than display:none so it animates, and so a child
+   that is the current page is never hidden from a screen reader mid-transition. */
+.navgrp-kids{display:grid;grid-template-rows:0fr;transition:grid-template-rows .16s ease}
+.navgrp-kids>a{overflow:hidden;min-height:0}
+.navgrp.open>.navgrp-kids{grid-template-rows:1fr}
+/* The rail that makes a child read as a child. Indent alone is too weak at
+   this size to survive the eye skimming a vertical list. */
+.navgrp-kids>a{margin-left:20px;padding-left:12px;border-left:1px solid var(--border);
+  border-radius:0 var(--r) var(--r) 0}
+.navgrp-kids>a[aria-current="page"]{border-left-color:var(--gold)}
+
+/* Collapsed to an icon rail there is no room for a disclosure, and a flyout
+   would be a lot of machinery to reach three links. The children simply stay
+   visible as icons, so every destination is still one click away. */
+html.navmin .navgrp-top{display:none}
+html.navmin .navgrp-kids{grid-template-rows:1fr}
+html.navmin .navgrp-kids>a{margin-left:0;padding-left:0;border-left:0;
+  border-radius:var(--r)}
 .who{padding:13px 16px;border-top:1px solid var(--border);font-size:11.5px}
 .who .em{display:block;color:var(--ink);font-weight:500;overflow:hidden;
   text-overflow:ellipsis;white-space:nowrap}
@@ -283,12 +311,36 @@ const ICON = {
   catalog:
     '<path d="M4 5h16v14H4z" opacity=".25"/><path d="M4 9h16M9 9v10"/>',
   activity: '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
+  // Applications: stacked plates, a master list of things each holding more.
+  apps:
+    '<path d="M3 7.5 12 3l9 4.5-9 4.5z"/><path d="M3 12l9 4.5 9-4.5"/>'
+    + '<path d="M3 16.5 12 21l9-4.5"/>',
+  config:
+    '<path d="M4 6h10M18 6h2M4 12h2M10 12h10M4 18h12M20 18h0"/>'
+    + '<circle cx="16" cy="6" r="2"/><circle cx="8" cy="12" r="2"/><circle cx="18" cy="18" r="2"/>',
   health:
     '<circle cx="12" cy="12" r="9" opacity=".3"/><path d="M8 12h2l1.5 4 2-8L15 12h2"/>',
   settings:
     '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
 };
 
+/**
+ * The sidebar.
+ *
+ * Two kinds of entry: a plain destination, and a GROUP — a parent with
+ * children, which is how Applications, Logs and Config now sit under Admin.
+ *
+ * The parent is a <button>, not a link. A parent that both navigates and
+ * expands does the wrong one of those about half the time, and there is no
+ * "Admin" page worth landing on anyway: the three things underneath it are
+ * the destinations.
+ *
+ * The group opens by itself whenever the current page is inside it, so you can
+ * always see where you are. Beyond that the open/closed state is remembered
+ * per browser, like the collapse toggle — it is a preference, not state anyone
+ * else needs, so it stays out of the database and out of the cookie sent on
+ * every request.
+ */
 const TABS = [
   ['/admin', 'Overview', 'overview', 'LIVE'],
   ['/admin/studio', 'API Studio', 'studio', 'BUILD'],
@@ -296,11 +348,24 @@ const TABS = [
   ['/admin/consumers', 'Consumers', 'consumers', 'MGMT'],
   ['/admin/endpoints', 'Endpoints', 'endpoints', 'CFG'],
   ['/admin/activity', 'Activity', 'activity', 'USAGE'],
-  ['/admin/logs', 'Logs', 'logs', 'AUDIT'],
   ['/admin/health', 'Health', 'health', ''],
-  ['/admin/settings', 'Admin config', 'settings', 'CFG'],
+  {
+    group: 'admin',
+    label: 'Admin',
+    icon: 'settings',
+    children: [
+      ['/admin/applications', 'Applications', 'apps', 'MASTER'],
+      ['/admin/logs', 'Logs', 'logs', 'AUDIT'],
+      ['/admin/settings', 'Config', 'config', ''],
+    ],
+  },
   ['/admin/how', 'How it works', 'how', ''],
 ];
+
+/** Does `current` sit inside this group? Decides whether it opens on load. */
+function groupHolds(entry, current) {
+  return Boolean(entry.children && entry.children.some(([href]) => href === current));
+}
 
 function svg(name) {
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
@@ -337,12 +402,25 @@ function layout({ title, admin, current, body, flash }) {
   // title on every link: collapsed, the label is hidden and the icon is the
   // only thing naming a destination, which makes an icon-only rail a guessing
   // game without it.
-  const nav = TABS.map(
-    ([href, label, icon, tag]) =>
-      `<a href="${href}" title="${esc(label)}"${href === current ? ' aria-current="page"' : ''}>` +
-      `${svg(icon)}<span>${esc(label)}</span>` +
-      `${tag ? `<span class="tag">${esc(tag)}</span>` : ''}</a>`
-  ).join('');
+  const link = ([href, label, icon, tag]) =>
+    `<a href="${href}" title="${esc(label)}"${href === current ? ' aria-current="page"' : ''}>` +
+    `${svg(icon)}<span>${esc(label)}</span>` +
+    `${tag ? `<span class="tag">${esc(tag)}</span>` : ''}</a>`;
+
+  const nav = TABS.map((entry) => {
+    if (Array.isArray(entry)) return link(entry);
+    const open = groupHolds(entry, current);
+    return `<div class="navgrp${open ? ' open' : ''}" data-group="${esc(entry.group)}">
+      <button type="button" class="navgrp-top" aria-expanded="${open}"
+              title="${esc(entry.label)}">
+        ${svg(entry.icon)}<span>${esc(entry.label)}</span>
+        <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"
+             aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+      </button>
+      <div class="navgrp-kids">${entry.children.map(link).join('')}</div>
+    </div>`;
+  }).join('');
 
   const flashHtml = flash
     ? `<div class="flash ${flash.kind === 'err' ? 'err' : 'ok'}">${esc(flash.text)}</div>`
@@ -420,6 +498,28 @@ try { if (localStorage.getItem('gw_nav') === 'min') document.documentElement.cla
     try { localStorage.setItem('gw_nav', min ? 'min' : 'full'); } catch (e) {}
     paint();
   });
+})();
+
+/* Nav groups. A group holding the current page is rendered open by the server
+   and is left alone here: remembering "closed" must never hide the page you
+   are standing on. */
+(function () {
+  var groups = document.querySelectorAll('.navgrp');
+  for (var i = 0; i < groups.length; i++) {
+    (function (g) {
+      var key = 'gw_nav_' + g.getAttribute('data-group');
+      var top = g.querySelector('.navgrp-top');
+      if (!g.classList.contains('open')) {
+        try { if (localStorage.getItem(key) === 'open') g.classList.add('open'); } catch (e) {}
+        top.setAttribute('aria-expanded', g.classList.contains('open') ? 'true' : 'false');
+      }
+      top.addEventListener('click', function () {
+        var open = g.classList.toggle('open');
+        top.setAttribute('aria-expanded', open ? 'true' : 'false');
+        try { localStorage.setItem(key, open ? 'open' : 'shut'); } catch (e) {}
+      });
+    })(groups[i]);
+  }
 })();
 </script>
 <script>

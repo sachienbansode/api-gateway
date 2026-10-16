@@ -647,6 +647,89 @@ describe('database-backed gateway', { skip: !HAVE_DB ? 'set TEST_DATABASE_URL to
     await db.query('DELETE FROM gateway.audit_log');
   });
 
+  // -------------------------------------------------------------------------
+  // The supplier application master
+  // -------------------------------------------------------------------------
+
+  test('an application deactivates rather than deletes, and really stops serving', async () => {
+    const apps = require('../src/db/repos/applications');
+    const catalog = require('../src/db/repos/catalog');
+
+    await db.query(
+      `INSERT INTO gateway.upstreams (name, base_url, display_name, vendor_name, timeout_ms)
+       VALUES ('acme_feed','https://feed.example.com','ACME Feed','ACME Data Ltd',9000)
+       ON CONFLICT (name) DO NOTHING`
+    );
+    await db.query(
+      `INSERT INTO gateway.endpoints
+         (name, method, path, upstream, upstream_path, display_name, status, enabled,
+          response_mode, response_fields)
+       VALUES ('acme_live','GET','/v1/acme/live','acme_feed','/live','ACME Live','live',true,
+               'whitelist','{a}')
+       ON CONFLICT (name) DO NOTHING`
+    );
+
+    // Paste an address list the way people actually paste one — Outlook uses
+    // semicolons, a spreadsheet gives newlines, and the same person is usually
+    // in there twice.
+    await apps.save({
+      name: 'acme_feed', displayName: 'ACME Feed', owner: 'Market Data Team',
+      alertEmails: 'ops@ashikagroup.com; md@ashikagroup.com\n OPS@ashikagroup.com',
+      alertsEnabled: true,
+    }, 'tester');
+    const saved = await apps.get('acme_feed');
+    assert.deepStrictEqual(saved.alert_emails, ['ops@ashikagroup.com', 'md@ashikagroup.com']);
+
+    // An update that does not carry base_url must not blank it. This is how a
+    // form quietly destroys a field it never knew about.
+    assert.strictEqual(saved.base_url, 'https://feed.example.com');
+    assert.strictEqual(saved.timeout_ms, 9000);
+
+    // A typo is refused, and refused before anything is written — an address
+    // that fails at send time fails during the incident it existed for.
+    await assert.rejects(
+      () => apps.save({ name: 'acme_feed', alertEmails: 'ops@ashikagroup.com, oops' }, 'tester'),
+      /not an email address/
+    );
+    assert.deepStrictEqual((await apps.get('acme_feed')).alert_emails, saved.alert_emails);
+
+    // Deactivating is the claim the screen makes to the user, so check the
+    // claim rather than the flag: the application and its endpoints must be
+    // absent from what the gateway actually serves.
+    await apps.setActive('acme_feed', false, 'tester', 'Contract under review');
+    const off = await apps.get('acme_feed');
+    assert.strictEqual(off.enabled, false);
+    assert.strictEqual(off.deactivated_reason, 'Contract under review');
+    assert.strictEqual(off.deactivated_by, 'tester');
+
+    const served = await catalog.toManifest();
+    assert.ok(!served.upstreams.acme_feed, 'deactivated: not in the served config');
+    assert.strictEqual(served.endpoints.filter((e) => e.upstream === 'acme_feed').length, 0,
+      'and neither are its endpoints');
+
+    // Nothing was deleted, which is the other half of the promise.
+    assert.strictEqual((await apps.endpointsUnder('acme_feed')).length, 1);
+
+    await apps.setActive('acme_feed', true, 'tester', null);
+    const on = await apps.get('acme_feed');
+    assert.strictEqual(on.enabled, true);
+    assert.strictEqual(on.deactivated_reason, null, 'the stale reason is cleared');
+    assert.ok((await catalog.toManifest()).upstreams.acme_feed, 'serving again');
+
+    // Every one of those is in the change log.
+    const log = await db.query(
+      `SELECT action FROM gateway.catalog_audit
+        WHERE object_id='acme_feed' AND actor='tester' ORDER BY id`
+    );
+    const actions = log.rows.map((r) => r.action);
+    assert.ok(actions.includes('disable'), 'deactivation audited');
+    assert.ok(actions.includes('enable'), 'reactivation audited');
+
+    // And there is no way to delete one, by design.
+    assert.strictEqual(typeof apps.delete, 'undefined');
+    assert.strictEqual(typeof apps.remove, 'undefined');
+  });
+
   test('migrations are idempotent and detect tampering', async () => {
     const logger = { info: () => {}, warn: () => {}, error: () => {} };
     const again = await migrate(logger);

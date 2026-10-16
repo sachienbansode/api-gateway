@@ -17,6 +17,8 @@ const {
 } = require('../middleware/adminAuth');
 const db = require('../db/pool');
 const vendorRepo = require('../db/repos/vendors');
+const appRepo = require('../db/repos/applications');
+const applicationsPage = require('./applicationsPage');
 const auditRepo = require('../db/repos/audit');
 const quotaRepo = require('../db/repos/quota');
 
@@ -511,6 +513,120 @@ function buildAdminRouter(logger, deps = {}) {
   // changed, and a bookmark or a pasted link is not a reason to see a 404.
   router.get(/^\/vendors(\/.*)?$/, (req, res) => {
     res.redirect(301, '/admin/consumers' + (req.params[0] || ''));
+  });
+
+  // -------------------------------------------------------------------------
+  // Applications — the supplier application master
+  //
+  // There is no DELETE route here, and that is not an oversight to be tidied
+  // up later. The reference is the foreign key in `endpoints`, the scope baked
+  // into every credential's AAD and the `upstream` column on every audit row
+  // ever written about it. Deactivation is the reversible operation people
+  // actually want, and it has its own confirmation naming what stops serving.
+  // -------------------------------------------------------------------------
+
+  const appsBack = (msg, kind = 'ok', at = '') =>
+    `/admin/applications${at}?${kind}=` + encodeURIComponent(msg);
+
+  router.get('/applications', async (req, res, next) => {
+    try {
+      const rows = db.isEnabled() ? await appRepo.list() : [];
+      res.type('html').send(applicationsPage.applicationsPage({
+        admin: req.admin, flash: flashOf(req), rows, canEdit: req.admin.canEdit,
+      }));
+    } catch (err) { next(err); }
+  });
+
+  router.get('/applications/new', (req, res) => {
+    if (!req.admin.canEdit) return res.redirect(303, appsBack('Your role is read-only here.', 'err'));
+    res.type('html').send(applicationsPage.applicationPage({
+      admin: req.admin, flash: flashOf(req), app: null, endpoints: [],
+      canEdit: true, isNew: true,
+    }));
+  });
+
+  router.get('/applications/:name', async (req, res, next) => {
+    try {
+      const app = await appRepo.get(req.params.name);
+      if (!app) return res.redirect(303, appsBack(`No application called "${req.params.name}".`, 'err'));
+      const endpoints = await appRepo.endpointsUnder(app.name);
+      res.type('html').send(applicationsPage.applicationPage({
+        admin: req.admin, flash: flashOf(req), app, endpoints, canEdit: req.admin.canEdit,
+      }));
+    } catch (err) { next(err); }
+  });
+
+  const appInput = (b) => ({
+    name: b.name,
+    displayName: b.display_name,
+    vendorName: b.vendor_name,
+    owner: b.owner,
+    baseUrl: b.base_url,
+    timeoutMs: b.timeout_ms,
+    notes: b.notes,
+    alertEmails: b.alert_emails,
+    // An unchecked box sends nothing at all, so absence is false rather than
+    // "leave it alone" — which is exactly what the form means here.
+    alertsEnabled: b.alerts_enabled === '1',
+  });
+
+  router.post('/applications/new', async (req, res) => {
+    if (!req.admin.canEdit) return res.redirect(303, appsBack('Your role is read-only here.', 'err'));
+    try {
+      const saved = await appRepo.save(appInput(req.body || {}), req.admin.email);
+      logger.info({ actor: req.admin.email, application: saved.name }, 'application created');
+      if (deps.reloadCatalog) await deps.reloadCatalog().catch(() => {});
+      res.redirect(303, `/admin/applications/${saved.name}?ok=` + encodeURIComponent(
+        'Added. Build its endpoints in the Studio.'));
+    } catch (err) {
+      res.redirect(303, '/admin/applications/new?err=' + encodeURIComponent(err.message));
+    }
+  });
+
+  router.post('/applications/:name', async (req, res) => {
+    if (!req.admin.canEdit) return res.redirect(303, appsBack('Your role is read-only here.', 'err'));
+    try {
+      const body = { ...(req.body || {}), name: req.params.name };
+      await appRepo.save(appInput(body), req.admin.email);
+      logger.info({ actor: req.admin.email, application: req.params.name }, 'application updated');
+      if (deps.reloadCatalog) await deps.reloadCatalog().catch(() => {});
+      res.redirect(303, `/admin/applications/${req.params.name}?ok=` + encodeURIComponent('Saved.'));
+    } catch (err) {
+      res.redirect(303, `/admin/applications/${req.params.name}?err=` + encodeURIComponent(err.message));
+    }
+  });
+
+  router.post('/applications/:name/deactivate', async (req, res) => {
+    if (!req.admin.canEdit) return res.redirect(303, appsBack('Your role is read-only here.', 'err'));
+    try {
+      const app = await appRepo.setActive(req.params.name, false, req.admin.email,
+        (req.body || {}).reason);
+      const held = await appRepo.endpointsUnder(app.name);
+      // Logged at warn: this takes endpoints out of service, and the person
+      // reading journald during an incident should find it without filtering.
+      logger.warn({
+        actor: req.admin.email, application: app.name,
+        endpointsHeld: held.length, reason: app.deactivated_reason,
+      }, 'application deactivated — its endpoints are no longer served');
+      if (deps.reloadCatalog) await deps.reloadCatalog().catch(() => {});
+      res.redirect(303, `/admin/applications/${app.name}?ok=` + encodeURIComponent(
+        `Deactivated. ${held.length} endpoint(s) held — nothing was deleted.`));
+    } catch (err) {
+      res.redirect(303, `/admin/applications/${req.params.name}?err=` + encodeURIComponent(err.message));
+    }
+  });
+
+  router.post('/applications/:name/activate', async (req, res) => {
+    if (!req.admin.canEdit) return res.redirect(303, appsBack('Your role is read-only here.', 'err'));
+    try {
+      const app = await appRepo.setActive(req.params.name, true, req.admin.email, null);
+      logger.info({ actor: req.admin.email, application: app.name }, 'application reactivated');
+      if (deps.reloadCatalog) await deps.reloadCatalog().catch(() => {});
+      res.redirect(303, `/admin/applications/${app.name}?ok=` + encodeURIComponent(
+        'Reactivated. Endpoints that were live are answering again.'));
+    } catch (err) {
+      res.redirect(303, `/admin/applications/${req.params.name}?err=` + encodeURIComponent(err.message));
+    }
   });
 
   router.get('/consumers', async (req, res, next) => {
