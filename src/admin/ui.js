@@ -152,6 +152,13 @@ main{min-width:0;padding:22px 26px 60px;max-width:1500px}
 .stat .n small{font-size:13px;color:var(--ink3);font-weight:400}
 .stat.alert .n{color:var(--red)}
 .stat.good .n{color:var(--green)}
+/* A number that is not a count of anything anyone did. Recessive on purpose:
+   turned-away traffic is context, not an achievement or a fault. */
+.stat .n.muted{color:var(--ink2)}
+.stat .sh{font-size:10.5px;color:var(--ink3);margin-top:3px;line-height:1.3}
+/* "There is no such number", which is not the same as zero — a median over
+   zero calls is undefined, and printing 0 ms claims the gateway is instant. */
+.nil{color:var(--ink3);font-weight:400}
 
 /* ---------- tables ---------- */
 .wrap{overflow-x:auto}

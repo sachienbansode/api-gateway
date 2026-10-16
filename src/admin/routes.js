@@ -474,8 +474,12 @@ function buildAdminRouter(logger, deps = {}) {
       // Without a database there is no traffic to show. The page still renders
       // — the catalogue and the breakers are in memory — rather than erroring,
       // because "no database" is a configuration state, not a failure.
-      const empty = { calls: 0, errors: 0, consumers: 0, endpoints: 0, p50_ms: 0, p95_ms: 0 };
-      const [summary, series, topEndpoints, slowest, topConsumers, errors, health, draft] =
+      const empty = {
+        requests: 0, calls: 0, turned_away: 0, errors: 0,
+        consumers: 0, endpoints: 0, p50_ms: 0, p95_ms: 0,
+      };
+      const [summary, series, topEndpoints, slowest, topConsumers, errors, turnedAway,
+             health, draft] =
         db.isEnabled()
           ? await Promise.all([
               logsRepo.trafficSummary({ since }),
@@ -484,17 +488,18 @@ function buildAdminRouter(logger, deps = {}) {
               logsRepo.slowest({ since }),
               logsRepo.topConsumers({ since }),
               logsRepo.errorBreakdown({ since }),
+              logsRepo.turnedAwayBreakdown({ since }),
               liveHealth(),
               db.query(`SELECT count(*)::int n FROM gateway.endpoints WHERE status = 'draft'`)
                 .then((r) => r?.rows?.[0]?.n || 0).catch(() => 0),
             ])
-          : [empty, [], [], [], [], [], await liveHealth(), 0];
+          : [empty, [], [], [], [], [], [], await liveHealth(), 0];
       exposure.draft = draft;
 
       res.type('html').send(
         dashboardPage.overviewPage({
           admin: req.admin, flash: flashOf(req), since, summary, series,
-          topEndpoints, slowest, topConsumers, errors, health, exposure,
+          topEndpoints, slowest, topConsumers, errors, turnedAway, health, exposure,
         })
       );
     } catch (err) {

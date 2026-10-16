@@ -26,17 +26,38 @@ const { esc, fmtNum } = require('./ui');
  * Status colours (good / warning / critical) are reserved for state and never
  * reused as a series, which is why a breaker pill can never be mistaken for a
  * line on a chart.
+ *
+ * THE NEUTRAL, AND WHY TURNED-AWAY TRAFFIC IS NOT A THIRD SEGMENT
+ *
+ * Requests rejected before routing were nearly stacked on top of these two as a
+ * third colour. Two things ruled that out.
+ *
+ * Measured, not guessed: on the dark surface no neutral clears the ΔE 15
+ * normal-vision floor against both #5b8fd6 and #e0695c at once — a cool grey
+ * collides with the blue, a warm one with the red. More importantly the form
+ * was wrong anyway. Stacking asserts the parts belong to one total, and
+ * "requests including the ones we refused" is a number nobody acts on. On a
+ * public hostname the scanners outnumber the real calls, so the segment that
+ * matters would be a sliver under a grey wall.
+ *
+ * So it gets its own strip under the main chart, sharing the x-axis: small
+ * multiples rather than a stack. Alone on its own plot the neutral has no
+ * adjacent pair to separate from — only contrast against the surface applies,
+ * and #737d88 / #8c96a1 clear 3:1 on both.
  */
 
 const PALETTE = `
-.chart{--ok:#1a4fa0;--bad:#c0392b;--grid:var(--border);display:block;width:100%;height:auto}
-@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .chart{--ok:#5b8fd6;--bad:#e0695c}}
+.chart{--ok:#1a4fa0;--bad:#c0392b;--neutral:#737d88;--grid:var(--border);
+  display:block;width:100%;height:auto}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .chart{
+  --ok:#5b8fd6;--bad:#e0695c;--neutral:#8c96a1}}
 .chart .grid{stroke:var(--grid);stroke-width:1}
 .chart .axis{font:400 9.5px var(--sans);fill:var(--ink3)}
 .chart .lbl{font:500 10.5px var(--sans);fill:var(--ink2)}
 .chart .val{font:600 10.5px var(--mono);fill:var(--ink)}
 .chart .ok{fill:var(--ok)}
 .chart .bad{fill:var(--bad)}
+.chart .neutral{fill:var(--neutral)}
 .chart .hit{fill:transparent;cursor:default}
 .chart .hit:hover ~ .bar-ok,.chart .hit:hover ~ .bar-bad{opacity:.75}
 .chartkey{display:flex;gap:14px;align-items:center;font-size:11px;color:var(--ink2);
@@ -45,9 +66,12 @@ const PALETTE = `
   vertical-align:-1px}
 .chartkey .k-ok i{background:var(--ok)}
 .chartkey .k-bad i{background:var(--bad)}
-.chartkey .k-ok,.chartkey .k-bad{--ok:#1a4fa0;--bad:#c0392b}
+.chartkey .k-neutral i{background:var(--neutral)}
+.chartkey .k-ok,.chartkey .k-bad,.chartkey .k-neutral{--ok:#1a4fa0;--bad:#c0392b;--neutral:#737d88}
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .chartkey .k-ok,
-  :root:not([data-theme="light"]) .chartkey .k-bad{--ok:#5b8fd6;--bad:#e0695c}}
+  :root:not([data-theme="light"]) .chartkey .k-bad,
+  :root:not([data-theme="light"]) .chartkey .k-neutral{
+    --ok:#5b8fd6;--bad:#e0695c;--neutral:#8c96a1}}
 .empty-chart{padding:26px 15px;text-align:center;color:var(--ink3);font-size:12px}
 `;
 
@@ -62,22 +86,46 @@ const fmtDay = (d) => {
 };
 
 /**
+ * Shared x-geometry. The turned-away strip sits directly under the calls chart
+ * and has to line up with it column for column, or two charts of the same
+ * window read as two different windows.
+ */
+const GEO = { W: 980, L: 44, R: 10 };
+
+/**
+ * A ceiling for the y-axis that produces gridline labels people recognise.
+ *
+ * The midpoint matters as much as the top, which is the part the first version
+ * got wrong: it ceilinged a peak of 95 to 95, and the middle gridline came out
+ * "48" — a number with no meaning that makes a reader stop and work out the
+ * scale. Each rung is only accepted if half of it is a whole number too, so
+ * the axis always reads 0 / 50 / 100 rather than 0 / 48 / 95.
+ */
+function niceTop(peak) {
+  const mag = Math.pow(10, Math.floor(Math.log10(Math.max(1, peak))));
+  for (const m of [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10]) {
+    const t = m * mag;
+    if (t >= peak && Number.isInteger(t / 2)) return t;
+  }
+  return 10 * mag;
+}
+
+/**
  * Calls over time: stacked columns, succeeded below, failed above.
  *
  * Columns rather than a line because the buckets are counts in a period, not
  * samples of a continuous quantity — a line between two hourly totals implies
  * values at 10:30 that were never measured.
  */
-function callsOverTime(rows, { since = '24h' } = {}) {
+function callsOverTime(rows, { since = '24h', empty = 'No calls in this window yet.' } = {}) {
   if (!rows.length || !rows.some((r) => r.ok + r.failed > 0)) {
-    return `<p class="empty-chart">No calls in this window yet.</p>`;
+    return `<p class="empty-chart">${esc(empty)}</p>`;
   }
-  const W = 980, H = 190, L = 44, R = 10, T = 12, B = 26;
+  const { W, L, R } = GEO;
+  const H = 190, T = 12, B = 26;
   const iw = W - L - R, ih = H - T - B;
   const peak = Math.max(1, ...rows.map((r) => r.ok + r.failed));
-  // A round ceiling so the gridline labels are numbers people recognise.
-  const step = Math.max(1, Math.pow(10, Math.floor(Math.log10(peak))) / 2);
-  const top = Math.ceil(peak / step) * step;
+  const top = niceTop(peak);
   const bw = iw / rows.length;
   // 2px of surface between bars, per the mark spec — adjacent fills need a gap
   // or two columns read as one wide one.
@@ -133,6 +181,48 @@ function callsOverTime(rows, { since = '24h' } = {}) {
 }
 
 /**
+ * Turned away over time — the companion strip under the calls chart.
+ *
+ * Shares the x-geometry above so the columns align, carries no x-axis labels
+ * of its own (the chart above already names the hours, and repeating them
+ * doubles the ink to say the same thing), and is deliberately short: this is
+ * context for the chart above, not a rival to it.
+ */
+function turnedAwayStrip(rows, { empty = 'Nothing was turned away in this window.' } = {}) {
+  if (!rows.length || !rows.some((r) => r.turned_away > 0)) {
+    return `<p class="empty-chart">${esc(empty)}</p>`;
+  }
+  const { W, L, R } = GEO;
+  const H = 72, T = 10, B = 6;
+  const ih = H - T - B;
+  const peak = Math.max(1, ...rows.map((r) => r.turned_away || 0));
+  const bw = (W - L - R) / rows.length;
+  const w = Math.max(1, bw - 2);
+  const multiDay = rows.length > 48;
+  const label = multiDay ? fmtDay : fmtClock;
+
+  const bars = rows.map((r, i) => {
+    const v = r.turned_away || 0;
+    const h = v ? Math.max(1, (v / peak) * ih) : 0;
+    const x = L + i * bw + 1;
+    return `<g><title>${esc(`${label(r.bucket)} · ${fmtNum(v)} turned away`)}</title>
+      ${h ? `<rect class="neutral" x="${x}" y="${T + ih - h}" width="${w}" height="${h}" rx="1.5"/>` : ''}
+      <rect class="hit" x="${x}" y="${T}" width="${w}" height="${ih}"/></g>`;
+  }).join('');
+
+  return `
+<p class="chartkey">
+  <span class="k-neutral"><i></i>Turned away</span>
+  <span class="t2">Peak ${fmtNum(peak)} in one period.</span>
+</p>
+<svg class="chart" viewBox="0 0 ${W} ${H}" role="img"
+     aria-label="Requests turned away before reaching an endpoint, over the same window.">
+  <line class="grid" x1="${L}" x2="${W - R}" y1="${T + ih}" y2="${T + ih}"/>
+  ${bars}
+</svg>`;
+}
+
+/**
  * Ranked horizontal bars.
  *
  * Horizontal because the labels are endpoint names: rotated text under vertical
@@ -140,8 +230,13 @@ function callsOverTime(rows, { since = '24h' } = {}) {
  */
 function rankedBars(rows, {
   labelKey, valueKey, secondary = null, unit = '', tone = 'ok', width = 560,
+  // An empty state has to say WHY it is empty. "Nothing to show" over a window
+  // holding hundreds of rows reads as "no traffic", which was the opposite of
+  // the truth: every one of those requests was turned away before it could be
+  // attributed to an endpoint, so a panel grouped by endpoint had nothing.
+  empty = 'Nothing to show for this window.',
 } = {}) {
-  if (!rows.length) return `<p class="empty-chart">Nothing to show for this window.</p>`;
+  if (!rows.length) return `<p class="empty-chart">${empty}</p>`;
   // The viewBox has to match the width the panel actually gives it. An SVG
   // authored at 980 inside a 570px column scales to 58%, and 10px labels
   // become 6px — legible in the source and not on the screen.
@@ -179,4 +274,4 @@ function rankedBars(rows, {
 </svg>`;
 }
 
-module.exports = { PALETTE, callsOverTime, rankedBars };
+module.exports = { PALETTE, callsOverTime, turnedAwayStrip, rankedBars };

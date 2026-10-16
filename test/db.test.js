@@ -581,6 +581,72 @@ describe('database-backed gateway', { skip: !HAVE_DB ? 'set TEST_DATABASE_URL to
     assert.ok(n >= 1);
   });
 
+  // -------------------------------------------------------------------------
+  // Routed calls vs requests turned away at the door
+  // -------------------------------------------------------------------------
+
+  test('a request that never reached an endpoint is not counted as a failed call', async () => {
+    // This is the whole bug. A gateway on a public hostname collects scanners;
+    // every one gets a 401 before the router runs, so the row carries no
+    // endpoint and no consumer. Counting those as calls made the Overview
+    // report 100% failed, 0 ms typical and 0 consumers while the gateway was
+    // serving perfectly — every number true, the conclusion false.
+    const logsRepo = require('../src/db/repos/logs');
+    await db.query('DELETE FROM gateway.audit_log');
+
+    const rows = [
+      // 6 turned away: no key, a key we do not know, and an unknown path.
+      ...Array.from({ length: 4 }, () =>
+        [null, null, 401, 'unauthorized', 1, 'no key presented', '203.0.113.5']),
+      [null, null, 401, 'unauthorized', 1, 'unrecognised key', '198.51.100.9'],
+      [null, null, 404, 'not_found', 1, null, '192.0.2.4'],
+      // 3 real calls, one of which genuinely failed, all far slower than a
+      // rejection costs — which is exactly why mixing them ruins the median.
+      ['acme', 'company_history', 200, null, 300, null, '10.0.0.1'],
+      ['acme', 'company_history', 200, null, 400, null, '10.0.0.1'],
+      ['acme', 'company_master', 504, 'upstream_timeout', 15000, 'upstream timed out', '10.0.0.1'],
+    ];
+    for (const [vendor, ep, status, code, ms, reason, ip] of rows) {
+      await db.query(
+        `INSERT INTO gateway.audit_log
+           (request_id, vendor_id, endpoint, method, path, status, error_code,
+            total_ms, internal_reason, client_ip)
+         VALUES (gen_random_uuid(), $1, $2, 'GET', '/v1/x', $3, $4, $5, $6, $7)`,
+        [vendor, ep, status, code, ms, reason, ip]
+      );
+    }
+
+    const s = await logsRepo.trafficSummary({ since: '24h' });
+    assert.strictEqual(s.requests, 9, 'nine rows were written');
+    assert.strictEqual(s.calls, 3, 'only three reached an endpoint');
+    assert.strictEqual(s.turned_away, 6);
+    assert.strictEqual(s.errors, 1, 'one real call failed — not seven');
+
+    // The median describes a call somebody made, not the cost of saying no.
+    assert.strictEqual(s.p50_ms, 400);
+    assert.ok(s.p50_ms > 100, 'a rejection costing 1ms must not drag the median to 0');
+
+    // And the breakdown keeps apart two things the public error code merges:
+    // a scanner with no key, and a consumer whose key stopped working.
+    const why = await logsRepo.turnedAwayBreakdown({ since: '24h' });
+    const byCode = Object.fromEntries(why.map((r) => [r.code, r.n]));
+    assert.strictEqual(byCode['no key presented'], 4);
+    assert.strictEqual(byCode['unrecognised key'], 1);
+    assert.strictEqual(byCode.not_found, 1);
+
+    // Failures listed on the Overview are failures of calls, so a wall of
+    // scanner 401s can never bury the one real 504.
+    const failures = await logsRepo.errorBreakdown({ since: '24h' });
+    assert.deepStrictEqual(failures.map((f) => f.code), ['upstream_timeout']);
+
+    // Both bands are reachable from the log screen; neither hides the other.
+    assert.strictEqual((await logsRepo.traffic({ since: '24h', status: 'blocked' })).total, 6);
+    assert.strictEqual((await logsRepo.traffic({ since: '24h', status: 'routed' })).total, 3);
+    assert.strictEqual((await logsRepo.traffic({ since: '24h', status: 'error' })).total, 1);
+
+    await db.query('DELETE FROM gateway.audit_log');
+  });
+
   test('migrations are idempotent and detect tampering', async () => {
     const logger = { info: () => {}, warn: () => {}, error: () => {} };
     const again = await migrate(logger);

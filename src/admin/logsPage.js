@@ -86,8 +86,12 @@ function msCell(ms) {
 // Traffic
 // ---------------------------------------------------------------------------
 function trafficPage({ admin, flash, page: p, summary, facets, query }) {
-  const errRate = summary.calls
-    ? ((summary.errors / summary.calls) * 100).toFixed(1) : '0.0';
+  // Calls, not requests: a 401 for a scanner is not a call anyone made, and
+  // dividing by it understates the error rate among the consumers who got in.
+  const calls = Number(summary.calls || 0);
+  const blocked = Number(summary.turned_away || 0);
+  const errRate = calls ? ((summary.errors / calls) * 100).toFixed(1) : null;
+  const nil = '<span class="nil">—</span>';
 
   const rows = p.rows.map((r) => `
     <tr>
@@ -109,24 +113,34 @@ function trafficPage({ admin, flash, page: p, summary, facets, query }) {
     ${r.internal_reason ? `<tr class="why"><td colspan="7">
       <span class="t2">Why it failed, for your eyes — never sent to the consumer:</span>
       ${esc(r.internal_reason)}</td></tr>` : ''}`).join('')
-    || `<tr><td colspan="7" class="empty">No calls in this window${
-      query.q || query.consumer || query.endpoint || query.status ? ' matching these filters' : ''}.</td></tr>`;
+    || `<tr><td colspan="7" class="empty">No requests in this window${
+      query.q || query.consumer || query.endpoint || query.status ? ' matching these filters' : ''
+    }.${blocked && query.status !== 'blocked'
+      ? ` <a href="/admin/logs?status=blocked&since=${esc(query.since || '24h')}">${fmtNum(blocked)}
+          were turned away before reaching an endpoint</a>, which no endpoint or consumer filter
+          can show.` : ''}</td></tr>`;
 
   const body = `
 ${pageHead('Logs', 'Every call a consumer made, and everything an administrator changed.')}
 ${tabs('/admin/logs')}
 
 <div class="sum">
-  <div class="stat"><div class="l">Calls</div><div class="n">${fmtNum(summary.calls || 0)}</div></div>
-  <div class="stat ${Number(errRate) > 5 ? 'alert' : ''}">
-    <div class="l">Errors</div><div class="n">${errRate}<small>%</small></div></div>
+  <div class="stat"><div class="l">Calls</div><div class="n">${fmtNum(calls)}</div>
+    <div class="sh">reached an endpoint</div></div>
+  <div class="stat"><div class="l">Turned away</div><div class="n muted">${fmtNum(blocked)}</div>
+    <div class="sh">rejected before routing</div></div>
+  <div class="stat ${errRate !== null && Number(errRate) > 5 ? 'alert' : ''}">
+    <div class="l">Errors</div><div class="n">${errRate === null ? nil : `${errRate}<small>%</small>`}</div></div>
   <div class="stat"><div class="l">Consumers</div><div class="n">${fmtNum(summary.consumers || 0)}</div></div>
   <div class="stat"><div class="l">Endpoints</div><div class="n">${fmtNum(summary.endpoints || 0)}</div></div>
-  <div class="stat"><div class="l">Typical call</div><div class="n">${fmtNum(summary.p50_ms || 0)}<small> ms</small></div></div>
-  <div class="stat ${Number(summary.p95_ms) >= 3000 ? 'alert' : ''}">
-    <div class="l">1 in 20 took</div><div class="n">${fmtNum(summary.p95_ms || 0)}<small> ms or more</small></div></div>
-  <div class="stat ${Number(summary.max_ms) >= 10000 ? 'alert' : ''}">
-    <div class="l">Worst</div><div class="n">${fmtNum(summary.max_ms || 0)}<small> ms</small></div></div>
+  <div class="stat"><div class="l">Typical call</div><div class="n">${
+    calls ? `${fmtNum(summary.p50_ms || 0)}<small> ms</small>` : nil}</div></div>
+  <div class="stat ${calls && Number(summary.p95_ms) >= 3000 ? 'alert' : ''}">
+    <div class="l">1 in 20 took</div><div class="n">${
+      calls ? `${fmtNum(summary.p95_ms || 0)}<small> ms or more</small>` : nil}</div></div>
+  <div class="stat ${calls && Number(summary.max_ms) >= 10000 ? 'alert' : ''}">
+    <div class="l">Worst</div><div class="n">${
+      calls ? `${fmtNum(summary.max_ms || 0)}<small> ms</small>` : nil}</div></div>
 </div>
 
 <form class="filters" method="get" action="/admin/logs">
@@ -137,8 +151,12 @@ ${tabs('/admin/logs')}
   ${select('consumer', 'Consumer', facets.consumers, query.consumer, 'All consumers')}
   ${select('endpoint', 'Endpoint', facets.endpoints, query.endpoint, 'All endpoints')}
   ${select('status', 'Outcome', [
+    { code: 'routed', label: 'Reached an endpoint' },
     { code: 'ok', label: 'Succeeded' }, { code: 'error', label: 'Any error' },
     { code: 'client', label: 'Refused (4xx)' }, { code: 'server', label: 'Failed (5xx)' },
+    // Its own option because nothing else finds it: these rows carry no
+    // endpoint and no consumer, so every other filter on this form hides them.
+    { code: 'blocked', label: 'Turned away at the door' },
   ], query.status, 'Any outcome')}
   <div class="f acts"><button type="submit" class="primary">Filter</button>
     <a class="btn" href="/admin/logs">Clear</a></div>

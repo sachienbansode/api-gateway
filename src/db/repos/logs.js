@@ -9,6 +9,25 @@ const db = require('../pool');
  * day, so every query here is bounded, indexed and paged. Nothing on this path
  * does `SELECT *` without a LIMIT.
  *
+ * ROUTED vs TURNED AWAY
+ *
+ * Not every row in audit_log is a call. Authentication runs before the router,
+ * so a request with no key, a wrong key or a path that is not in the catalogue
+ * is rejected before any endpoint is matched — and lands here with `endpoint`
+ * and `vendor_id` both NULL.
+ *
+ * That distinction is the whole difference between "the gateway is broken" and
+ * "the gateway is working". A public hostname collects scanners; every one of
+ * them gets a 401, and counting those as failed calls produced a dashboard
+ * reading 100% failed, 0 ms typical, 0 consumers — every number true, the
+ * picture entirely false.
+ *
+ * So: `endpoint IS NOT NULL` is a CALL. Everything else was TURNED AWAY at the
+ * door, and is counted, shown and explained separately. Failure rates and
+ * latency percentiles are computed over calls alone, because the cost of
+ * refusing an anonymous request says nothing about how the gateway is serving
+ * the consumers who got in.
+ *
  * CHANGES is gateway.admin_audit: one row per thing an administrator did,
  * across the catalogue, credentials and settings.
  *
@@ -42,10 +61,15 @@ async function traffic({
   // `status` is a BAND, not a code: people look for "the errors", and nobody
   // remembers whether the one they want was a 502 or a 504.
   const band = {
-    ok: 'AND status < 400',
-    client: 'AND status >= 400 AND status < 500',
-    server: 'AND status >= 500',
-    error: 'AND status >= 400',
+    ok: 'AND endpoint IS NOT NULL AND status < 400',
+    client: 'AND endpoint IS NOT NULL AND status >= 400 AND status < 500',
+    server: 'AND endpoint IS NOT NULL AND status >= 500',
+    error: 'AND endpoint IS NOT NULL AND status >= 400',
+    // Rejected before any endpoint was matched: no key, wrong key, unknown
+    // path. Its own band because it is the one people cannot otherwise find —
+    // it belongs to no endpoint and no consumer, so every other filter hides it.
+    blocked: 'AND endpoint IS NULL',
+    routed: 'AND endpoint IS NOT NULL',
   }[status] || '';
 
   const res = await db.query(
@@ -80,9 +104,15 @@ async function traffic({
  */
 async function trafficSummary({ since = '24h', consumer = null, endpoint = null } = {}) {
   const r = await db.query(
-    `SELECT count(*)::int                                            AS calls,
-            count(*) FILTER (WHERE status >= 400)::int               AS errors,
-            count(*) FILTER (WHERE status >= 500)::int               AS server_errors,
+    `SELECT count(*)::int                                            AS requests,
+            -- A CALL is a request that reached an endpoint. Everything the
+            -- page says about failure and speed is measured over these.
+            count(*) FILTER (WHERE endpoint IS NOT NULL)::int         AS calls,
+            count(*) FILTER (WHERE endpoint IS NULL)::int             AS turned_away,
+            count(*) FILTER (WHERE endpoint IS NOT NULL
+                               AND status >= 400)::int               AS errors,
+            count(*) FILTER (WHERE endpoint IS NOT NULL
+                               AND status >= 500)::int               AS server_errors,
             count(DISTINCT vendor_id)::int                           AS consumers,
             count(DISTINCT endpoint)::int                            AS endpoints,
             -- Percentiles, not an average. A handful of 15-second timeouts
@@ -90,9 +120,16 @@ async function trafficSummary({ since = '24h', consumer = null, endpoint = null 
             -- so the one number people would quote is the one that describes
             -- nobody. The median says what a typical call cost; the 95th says
             -- what the unlucky twentieth cost; the max says how bad it got.
-            coalesce(percentile_disc(0.50) WITHIN GROUP (ORDER BY total_ms), 0)::int AS p50_ms,
-            coalesce(percentile_disc(0.95) WITHIN GROUP (ORDER BY total_ms), 0)::int AS p95_ms,
-            coalesce(max(total_ms), 0)::int                          AS max_ms
+            --
+            -- Filtered to calls for the same reason: refusing an unauthenticated
+            -- request costs well under a millisecond, so a few hundred of them
+            -- drag the median to 0 and the page reports a gateway that answers
+            -- instantly while its consumers wait seconds.
+            coalesce(percentile_disc(0.50) WITHIN GROUP (ORDER BY total_ms)
+                     FILTER (WHERE endpoint IS NOT NULL), 0)::int    AS p50_ms,
+            coalesce(percentile_disc(0.95) WITHIN GROUP (ORDER BY total_ms)
+                     FILTER (WHERE endpoint IS NOT NULL), 0)::int    AS p95_ms,
+            coalesce(max(total_ms) FILTER (WHERE endpoint IS NOT NULL), 0)::int AS max_ms
        FROM gateway.audit_log
       WHERE true ${sinceClause(since)}
         AND ($1::text IS NULL OR vendor_id = $1)
@@ -100,6 +137,41 @@ async function trafficSummary({ since = '24h', consumer = null, endpoint = null 
     [consumer, endpoint]
   );
   return r?.rows?.[0] || {};
+}
+
+/**
+ * Why requests were turned away before reaching an endpoint.
+ *
+ * The most useful table on the Overview when nothing is getting through, and
+ * the one the old page had no way to show: these rows belong to no endpoint
+ * and no consumer, so every panel that grouped by either rendered "nothing to
+ * show" over hundreds of rows.
+ *
+ * `sources` separates the two cases that look identical in a count. One
+ * address hammering the door is a consumer with a stale key and a retry loop;
+ * forty addresses is the internet finding a public hostname.
+ *
+ * Grouped on `internal_reason` first, not `error_code`. Both "no key presented"
+ * and "unrecognised key" are sent to the caller as the same `unauthorized` —
+ * deliberately, so a prober learns nothing from the difference — which makes
+ * error_code useless here: it collapses a scanner and a consumer whose key has
+ * been revoked into one indistinguishable row. internal_reason keeps them
+ * apart and is never sent to anyone.
+ */
+async function turnedAwayBreakdown({ since = '24h', limit = 8 } = {}) {
+  const r = await db.query(
+    `SELECT coalesce(internal_reason, error_code, 'status ' || status::text) AS code,
+            max(status)::int                                AS status,
+            count(*)::int                                   AS n,
+            count(DISTINCT client_ip)::int                  AS sources,
+            max(occurred_at)                                AS last_seen,
+            (array_agg(DISTINCT path))[1:3]                 AS paths
+       FROM gateway.audit_log
+      WHERE endpoint IS NULL ${sinceClause(since)}
+      GROUP BY 1 ORDER BY n DESC LIMIT $1`,
+    [limit]
+  );
+  return r?.rows || [];
 }
 
 /** Values to populate the filter dropdowns, with counts. */
@@ -223,9 +295,13 @@ async function series({ since = '24h' } = {}) {
          interval '${spec.step}') AS t
      )
      SELECT b.t AS bucket,
-            count(a.id) FILTER (WHERE a.status < 400)::int  AS ok,
-            count(a.id) FILTER (WHERE a.status >= 400)::int AS failed,
-            coalesce(percentile_disc(0.95) WITHIN GROUP (ORDER BY a.total_ms), 0)::int AS p95_ms
+            count(a.id) FILTER (WHERE a.endpoint IS NOT NULL
+                                  AND a.status < 400)::int  AS ok,
+            count(a.id) FILTER (WHERE a.endpoint IS NOT NULL
+                                  AND a.status >= 400)::int AS failed,
+            count(a.id) FILTER (WHERE a.endpoint IS NULL)::int AS turned_away,
+            coalesce(percentile_disc(0.95) WITHIN GROUP (ORDER BY a.total_ms)
+                     FILTER (WHERE a.endpoint IS NOT NULL), 0)::int AS p95_ms
        FROM buckets b
        LEFT JOIN gateway.audit_log a
               ON a.occurred_at >= b.t
@@ -288,14 +364,20 @@ async function topConsumers({ since = '24h', limit = 6 } = {}) {
   return r?.rows || [];
 }
 
-/** What is going wrong, most common first. */
+/**
+ * What is going wrong, most common first — for calls that reached an endpoint.
+ *
+ * Scoped to routed calls so a quiet day of scanner traffic cannot fill this
+ * table with `unauthorized` and bury the one real 502 underneath it. What was
+ * turned away is a different question, with its own table.
+ */
 async function errorBreakdown({ since = '24h', limit = 6 } = {}) {
   const r = await db.query(
     `SELECT coalesce(error_code, 'status ' || status::text) AS code,
             count(*)::int AS n,
             max(status)::int AS status
        FROM gateway.audit_log
-      WHERE status >= 400 ${sinceClause(since)}
+      WHERE endpoint IS NOT NULL AND status >= 400 ${sinceClause(since)}
       GROUP BY 1 ORDER BY n DESC LIMIT $1`,
     [limit]
   );
@@ -304,7 +386,7 @@ async function errorBreakdown({ since = '24h', limit = 6 } = {}) {
 
 module.exports = {
   PAGE, SINCE,
-  traffic, trafficSummary, trafficFacets, byRequestId,
+  traffic, trafficSummary, trafficFacets, byRequestId, turnedAwayBreakdown,
   series, topEndpoints, slowest, topConsumers, errorBreakdown,
   changes, changeFacets, catalogDiff,
 };
