@@ -101,8 +101,13 @@ test('a timeout says WHICH timeout it was', async (t) => {
   // A supplier that never replied and a supplier whose body is too big to
   // finish arriving have different causes and different fixes, and the second
   // one additionally means live vendor calls are failing right now.
-  await t.test('nothing at all: reported as no answer', async () => {
-    const srv = http.createServer(() => { /* never responds */ });
+  await t.test('silent but reachable: blames the timeout, not the base URL', async () => {
+    // The old message told people to check the base URL here. That advice was
+    // wrong often enough to matter: a supplier whose master list takes 40s to
+    // build looks exactly like this, on a base URL whose other endpoints are
+    // answering in 300ms. Sending someone to re-check a URL that is correct
+    // costs an afternoon.
+    const srv = http.createServer(() => { /* accepts, never responds */ });
     await new Promise((r) => srv.listen(0, '127.0.0.1', r));
     try {
       const r = await tester.callUpstream({
@@ -111,8 +116,33 @@ test('a timeout says WHICH timeout it was', async (t) => {
       });
       assert.strictEqual(r.ok, false);
       assert.strictEqual(r.timedOutMidBody, false);
-      assert.match(r.error, /did not send any response/i);
+      assert.strictEqual(r.reachable, true);
+      assert.match(r.error, /accepted the connection/i);
+      assert.match(r.error, /raise the timeout/i);
+      // The specific regression: never send someone to check a URL we have
+      // just proved resolves, routes and accepts connections.
+      assert.doesNotMatch(r.error, /check the base url/i);
     } finally { srv.close(); }
+  });
+
+  await t.test('the reachability probe tells connected from unreachable', async () => {
+    const srv = http.createServer(() => {});
+    await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+    const port = srv.address().port;
+    try {
+      // Accepts connections but never answers: reachable is about the network,
+      // not about whether the application replied.
+      const up = await tester.probeOrigin(`http://127.0.0.1:${port}/Market/api/X`, 2000);
+      assert.strictEqual(up.reachable, true);
+    } finally { srv.close(); }
+
+    // Now nothing is listening on that port at all.
+    const down = await tester.probeOrigin(`http://127.0.0.1:${port}/Market/api/X`, 2000);
+    assert.strictEqual(down.reachable, false);
+    assert.match(String(down.why), /ECONNREFUSED|did not complete/);
+
+    const bad = await tester.probeOrigin('not a url', 500);
+    assert.strictEqual(bad.reachable, false);
   });
 
   await t.test('answered, then stalled mid-body: reported as too large, and as a live fault', async () => {
@@ -131,7 +161,7 @@ test('a timeout says WHICH timeout it was', async (t) => {
       assert.match(r.error, /started answering/i);
       assert.match(r.error, /supplier is up/i);
       // The part that turns a test result into an incident.
-      assert.match(r.error, /VENDOR CALLING THIS ENDPOINT WOULD FAIL/);
+      assert.match(r.error, /CONSUMER CALLING THIS ENDPOINT WOULD FAIL/);
       assert.doesNotMatch(r.error, /no answer/i);
     } finally { srv.close(); }
   });

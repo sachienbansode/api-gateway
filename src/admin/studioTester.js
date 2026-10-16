@@ -1,5 +1,7 @@
 'use strict';
 
+const net = require('node:net');
+const tls = require('node:tls');
 const projection = require('../core/projection');
 
 /**
@@ -214,27 +216,118 @@ async function callUpstream({ baseUrl, path, query = {}, method = 'GET', body = 
     // is simply bigger than it can deliver in the time allowed. Saying "no
     // answer" here points at the wrong thing — the supplier is up.
     const midBody = aborted && progress.headersAt !== null;
+
+    if (midBody) {
+      return {
+        ok: false,
+        ms,
+        url: url.toString(),
+        bytes: progress.bytes,
+        timedOutMidBody: true,
+        error:
+          `the supplier started answering in ${progress.headersAt} ms, but only ` +
+          `${mb(progress.bytes)} had arrived when the ${limit} ms timeout fired. The supplier ` +
+          'is up — this response is too large to finish in that time. A CONSUMER CALLING THIS ' +
+          'ENDPOINT WOULD FAIL THE SAME WAY, because the gateway uses the same timeout. ' +
+          'Raise the timeout on the supplier API in the Studio (step 1), or narrow what this ' +
+          'endpoint asks for.',
+      };
+    }
+
+    if (aborted) {
+      // Nothing arrived at all — and the old message guessed, badly. It told
+      // people to check the base URL, which is the right advice for exactly
+      // one of the two causes and actively misleading for the other: a
+      // neighbouring endpoint on the SAME base URL had just answered in 332 ms
+      // while this said the URL was suspect. So ask the host directly instead
+      // of guessing, and let the answer choose the sentence.
+      const reach = await probeOrigin(url);
+      const host = originOf(url);
+      return {
+        ok: false,
+        ms,
+        url: url.toString(),
+        bytes: 0,
+        timedOutMidBody: false,
+        reachable: reach.reachable,
+        error: reach.reachable
+          ? `no answer within ${limit} ms — the supplier accepted the connection and sent ` +
+            `nothing back before the deadline. This is not a base URL or network problem: ` +
+            `${host} answered a plain request in ${reach.ms} ms while this one was waiting, ` +
+            'so the supplier is up and still building this response when the timeout fires. ' +
+            'A CONSUMER CALLING THIS ENDPOINT WOULD FAIL THE SAME WAY, because the gateway ' +
+            'uses the same timeout. Raise the timeout on this supplier API in the Studio ' +
+            '(step 1) — a large master list commonly needs 60s — or ask the supplier for a ' +
+            'paged variant of this call.'
+          : `no answer within ${limit} ms, and this server could not reach ${host} at all ` +
+            `(${reach.why}). Check the base URL, and that this server is allowed to make ` +
+            'outbound calls to it.',
+      };
+    }
+
     return {
       ok: false,
       ms,
       url: url.toString(),
       bytes: progress.bytes,
-      timedOutMidBody: midBody,
-      error: midBody
-        ? `the supplier started answering in ${progress.headersAt} ms, but only ` +
-          `${mb(progress.bytes)} had arrived when the ${limit} ms timeout fired. The supplier ` +
-          'is up — this response is too large to finish in that time. A VENDOR CALLING THIS ' +
-          'ENDPOINT WOULD FAIL THE SAME WAY, because the gateway uses the same timeout. ' +
-          'Raise the timeout on the supplier API in the Studio (step 1), or narrow what this ' +
-          'endpoint asks for.'
-        : aborted
-        ? `no answer within ${limit} ms — the supplier did not send any response at all. ` +
-          'Check the base URL and that this server can reach it.'
-        : `could not reach the supplier: ${err.message}`,
+      timedOutMidBody: false,
+      error: `could not reach the supplier: ${err.message}`,
     };
   } finally {
     clearTimeout(timer);
   }
+}
+
+function originOf(url) {
+  try { return new URL(url).host; } catch { return String(url); }
+}
+
+/**
+ * Did this server fail to REACH the host, or did the host simply not answer in
+ * time? A timeout with no response headers looks identical in both cases, and
+ * the two call for opposite fixes, so this establishes which rather than
+ * letting the message guess.
+ *
+ * Deliberately a TCP (and, for https, TLS) handshake rather than a second HTTP
+ * request. The question is whether the host is reachable, and a host that is up
+ * but slow would leave a second HTTP request hanging exactly like the first —
+ * which is how the first version of this came to report a perfectly reachable
+ * supplier as unreachable. A completed handshake answers the question outright:
+ * DNS resolved, the route works, the port is open, the certificate is served.
+ * Whether the application then answers is the very thing we already know it did
+ * not, and is not evidence about the network.
+ */
+async function probeOrigin(url, timeoutMs = 4000) {
+  let u;
+  try {
+    u = new URL(url);
+  } catch {
+    return { reachable: false, ms: 0, why: 'the base URL is not a valid URL' };
+  }
+  const secure = u.protocol === 'https:';
+  const port = Number(u.port) || (secure ? 443 : 80);
+  const started = Date.now();
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (r) => {
+      if (settled) return;
+      settled = true;
+      try { sock.destroy(); } catch { /* already gone */ }
+      resolve({ ...r, ms: Date.now() - started });
+    };
+    const sock = secure
+      ? tls.connect({ host: u.hostname, port, servername: u.hostname })
+      : net.connect({ host: u.hostname, port });
+
+    sock.setTimeout(timeoutMs);
+    sock.once(secure ? 'secureConnect' : 'connect', () => finish({ reachable: true }));
+    sock.once('timeout', () => finish({
+      reachable: false,
+      why: `the connection to ${u.host} did not complete within ${timeoutMs} ms`,
+    }));
+    sock.once('error', (e) => finish({ reachable: false, why: e.code || e.message }));
+  });
 }
 
 /**
@@ -348,4 +441,6 @@ function project({ mode, fields = [], exclude = [], rename = {} }, body) {
   }
 }
 
-module.exports = { callUpstream, fillPath, discover, shapeOf, project, resolveRef, authFor };
+module.exports = {
+  callUpstream, fillPath, discover, shapeOf, project, resolveRef, authFor, probeOrigin,
+};
