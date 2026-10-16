@@ -1,0 +1,69 @@
+name: CI
+
+# The config-as-code design assumes a change is reviewable before it reaches the
+# VM. This is what makes that true: a malformed endpoints.yaml, a whitelist typo
+# or a broken test fails here instead of in front of the vendor.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: Node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['20', '22']
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: gateway_ci
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      # npm ci, not npm install: it installs exactly what package-lock.json
+      # pins. This service holds credentials to every upstream you own, so a
+      # transitive dependency resolving to something untested is not acceptable.
+      - run: npm ci
+
+      # Dummy credentials only. The point is to prove the manifests parse and
+      # every reference resolves, not to reach a real upstream.
+      - name: Validate manifests and print the exposure report
+        env:
+          INTERNAL_NODE_API_TOKEN: ci-dummy
+          INTERNAL_PY_API_KEY: ci-dummy
+          THIRDPARTY_PAYMENTS_KEY: ci-dummy
+          THIRDPARTY_PAYMENTS_SECRET: ci-dummy
+          THIRDPARTY_GEO_KEY: ci-dummy
+          VENDOR_KEY_ACME: 632065fd58f87cea877d383fd072d06d01f7af78cce4c0cdd6a47cb38f6ce9c6
+        run: npm run validate
+
+      - name: Tests with no database
+        run: npm test
+
+      # Idempotency and quota correctness depend on atomic SQL semantics, so
+      # these run against a real Postgres rather than a mock.
+      - name: Tests against real Postgres
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:ci@localhost:5432/gateway_ci
+          DB_SSL: disable
+        run: npm run test:db
