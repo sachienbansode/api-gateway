@@ -12,7 +12,7 @@ const { esc } = require('./loginPage');
  *
  * `error` and `email` are the only interpolated values and both are escaped.
  */
-function render({ error = '', title = '', email = '', minutes = 10, brand: b = null } = {}) {
+function render({ error = '', title = '', email = '', minutes = 10, next = '', brand: b = null } = {}) {
   const brand = (b && b.name) || title || 'Ashika - Pravah';
   const kicker = b ? b.tagline || '' : 'API Gateway';
   const full = kicker ? `${brand} ${kicker}` : brand;
@@ -85,6 +85,7 @@ function render({ error = '', title = '', email = '', minutes = 10, brand: b = n
     ${error ? `<div class="err" role="alert">${esc(error)}</div>` : ''}
 
     <form method="post" action="/admin/login/otp" autocomplete="off">
+      ${next ? `<input type="hidden" name="next" value="${esc(next)}">` : ''}
       <label for="code">Code</label>
       <input id="code" name="code" type="text" inputmode="numeric" pattern="[0-9]*"
              maxlength="6" required autofocus autocomplete="one-time-code"

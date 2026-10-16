@@ -144,8 +144,36 @@ function buildAdminRouter(logger, deps = {}) {
   // -------------------------------------------------------------------------
   // GET /admin/login
   // -------------------------------------------------------------------------
+  /**
+   * Where to send someone after a successful sign-in.
+   *
+   * Only a path on this console, and only one that looks like a path. An
+   * unvalidated `next` on a sign-in form is an open redirect, which is how a
+   * convincing phishing link gets built out of a domain people trust: the host
+   * is genuinely pravah.ashikagroup.com, the sign-in is genuine, and the
+   * landing page is not. A leading `//` or a `\` is enough for a browser to
+   * read what follows as a host, so both are refused along with anything that
+   * does not start /admin/.
+   */
+  function safeNext(value) {
+    const s = String(value || '');
+    if (!s.startsWith('/admin/')) return '';
+    if (s.startsWith('//') || s.includes('\\')) return '';
+    if (s.startsWith('/admin/login')) return '';   // never bounce back to here
+    return s.slice(0, 500);
+  }
+
   router.get('/login', (req, res) => {
-    res.type('html').send(loginPage.render({ title, brand: req.brand }));
+    res.type('html').send(loginPage.render({
+      title,
+      brand: req.brand,
+      notice: req.query.timeout
+        ? `You were signed out after ${session.idleMinutes()} ` +
+          `minute${session.idleMinutes() === 1 ? '' : 's'} without activity. ` +
+          'Sign in again to carry on.'
+        : '',
+      next: safeNext(req.query.next),
+    }));
   });
 
   // -------------------------------------------------------------------------
@@ -196,7 +224,7 @@ function buildAdminRouter(logger, deps = {}) {
         );
         attempts.recordSuccess(keys);
         session.setCookie(res, req, session.mint({ id: 'superadmin', email, superadmin: true }));
-        return res.redirect(303, '/admin');
+        return res.redirect(303, safeNext(req.body?.next) || '/admin');
       }
 
       // --- Door 2: platform account -----------------------------------------
@@ -277,12 +305,13 @@ function buildAdminRouter(logger, deps = {}) {
         otp.setPendingCookie(res, req, otp.mintPending(user), session.isSecure(req));
         logger?.info({ ip, email, role: user.role, requestId: req.id },
           'admin sign-in: password accepted, awaiting second factor');
-        return res.redirect(303, '/admin/login/otp');
+        return res.redirect(303, '/admin/login/otp' +
+          (safeNext(req.body?.next) ? '?next=' + encodeURIComponent(safeNext(req.body.next)) : ''));
       }
 
       logger?.info({ ip, email, role: user.role, requestId: req.id }, 'admin signed in');
       session.setCookie(res, req, session.mint({ id: user.id, email: user.email }));
-      return res.redirect(303, '/admin');
+      return res.redirect(303, safeNext(req.body?.next) || '/admin');
     } catch (err) {
       logger?.error({ err: err.message, ip, email }, 'admin sign-in error');
       return res
@@ -309,7 +338,8 @@ function buildAdminRouter(logger, deps = {}) {
     const pending = otp.readPending(req);
     if (!pending) return res.redirect(303, '/admin/login');
     res.type('html').send(
-      otpPage.render({ title, brand: req.brand, email: pending.email, minutes: Math.round(otp.CODE_TTL_MS / 60000) })
+      otpPage.render({ title, brand: req.brand, email: pending.email,
+        minutes: Math.round(otp.CODE_TTL_MS / 60000), next: safeNext(req.query.next) })
     );
   });
 
@@ -367,7 +397,8 @@ function buildAdminRouter(logger, deps = {}) {
       logger?.info({ ip, email: pending.email, requestId: req.id },
         'admin signed in (second factor)');
       session.setCookie(res, req, session.mint({ id: pending.id, email: pending.email }));
-      return res.redirect(303, '/admin');
+      const after = safeNext(req.body?.next) || safeNext(req.query?.next);
+      return res.redirect(303, after || '/admin');
     } catch (err) {
       logger?.error({ err: err.message, ip, requestId: req.id }, 'admin second factor error');
       return res.status(503).type('html').send(
@@ -398,10 +429,45 @@ function buildAdminRouter(logger, deps = {}) {
 
   router.use((req, res, next) => {
     auth(req, res, (err) => {
-      if (!err) return next();
+      if (!err) {
+        // Sliding idle window. Every request the administrator makes pushes
+        // the 30-minute clock forward; nothing pushes the 8-hour ceiling,
+        // which renew() carries through unchanged.
+        //
+        // Guarded by headersSent because a handler further down may already
+        // have streamed — appending Set-Cookie then throws and turns a
+        // successful page into a 500.
+        try {
+          const fresh = session.renew(req.adminClaims);
+          if (fresh && !res.headersSent) session.setCookie(res, req, fresh);
+        } catch (e) {
+          // A session that cannot be renewed is not a request that should
+          // fail; it simply expires on schedule.
+          logger.warn({ err: e.message }, 'could not renew the admin session cookie');
+        }
+        return next();
+      }
+
       const wantsHtml = String(req.headers.accept || '').includes('text/html');
       if (wantsHtml && (err.status === 401 || err.status === 403)) {
-        return res.redirect(303, '/admin/login');
+        // Clear the dead cookie on the way out. Without this the browser keeps
+        // presenting an expired token on every subsequent request, and the
+        // sign-in page is reached carrying a credential that cannot work.
+        // Remember where they were headed, whether they timed out or simply
+        // arrived on a bookmarked deep link while signed out. Both end at the
+        // sign-in page, and in both cases dumping them on the Overview
+        // afterwards makes them navigate back by hand.
+        const back = req.originalUrl && req.method === 'GET' && req.originalUrl !== '/admin'
+          ? 'next=' + encodeURIComponent(req.originalUrl)
+          : '';
+        if (err.expiredSession) {
+          // Clear the dead cookie on the way out. Without this the browser
+          // keeps presenting an expired token on every later request, and the
+          // sign-in page is reached carrying a credential that cannot work.
+          session.clearCookie(res, req);
+          return res.redirect(303, '/admin/login?timeout=1' + (back ? '&' + back : ''));
+        }
+        return res.redirect(303, '/admin/login' + (back ? '?' + back : ''));
       }
       return next(err);
     });
@@ -513,6 +579,30 @@ function buildAdminRouter(logger, deps = {}) {
   // changed, and a bookmark or a pasted link is not a reason to see a 404.
   router.get(/^\/vendors(\/.*)?$/, (req, res) => {
     res.redirect(301, '/admin/consumers' + (req.params[0] || ''));
+  });
+
+  /**
+   * Keepalive for the "Stay signed in" button.
+   *
+   * It does nothing itself. Reaching this handler at all means the request
+   * already passed admin auth, and the middleware above slid the idle window
+   * on the way through — so the renewal is a side effect of being
+   * authenticated, not a privilege this route grants. There is deliberately no
+   * second code path that can extend a session.
+   *
+   * It cannot outlive the absolute ceiling either: renew() refuses once
+   * gw_abs is reached, so a tab pinging every 29 minutes still ends at 8 hours.
+   */
+  router.get('/session/ping', (req, res) => {
+    res.set('Cache-Control', 'no-store').json({
+      ok: true,
+      idleSeconds: session.idleSeconds(),
+      // So the client can show the real remaining life rather than assuming a
+      // full window it may not get near the ceiling.
+      expiresIn: req.adminClaims?.gw_abs
+        ? Math.max(0, Number(req.adminClaims.gw_abs) - Math.floor(Date.now() / 1000))
+        : null,
+    });
   });
 
   // -------------------------------------------------------------------------

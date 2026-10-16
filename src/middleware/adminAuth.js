@@ -280,6 +280,9 @@ function makeAdminAuth(logger) {
     // 1. Break-glass first — it must work even when the platform is unreachable.
     //    That is the whole point of having it.
     let user;
+    // Declared out here so the renewal below can see it. Scoped to the token
+    // branch it would be invisible by the time anyone needs it.
+    let claims = null;
     try {
       const sa = await trySuperadmin(req, logger);
       if (sa === false) {
@@ -307,14 +310,34 @@ function makeAdminAuth(logger) {
         return next(errors.serviceUnavailable('Administrator authentication is not configured.'));
       }
 
-      let claims;
       try {
         claims = jwt.verify(token, process.env.JWT_SECRET, {
           issuer: process.env.JWT_ISSUER || undefined,
           clockTolerance: 5,
         });
-      } catch {
-        return next(errors.unauthorized('Invalid or expired token.'));
+      } catch (err) {
+        // An EXPIRED token and a FORGED one are both 401s, but they mean
+        // opposite things to the person holding it: one was signed in and
+        // walked away, the other never was. Flagged so the sign-in page can
+        // say "signed out after 30 minutes" instead of implying something is
+        // wrong with their account. The message to the caller stays identical
+        // either way — an attacker learns nothing from it.
+        const e = errors.unauthorized('Invalid or expired token.');
+        if (err && err.name === 'TokenExpiredError') e.expiredSession = true;
+        return next(e);
+      }
+
+      // The ABSOLUTE ceiling, independent of the token's own expiry.
+      //
+      // mint() will not issue a token that outlives gw_abs, so under normal
+      // operation exp fires first. This is here for the case that is not
+      // normal operation: a token re-signed by something other than renew(),
+      // or a clock that moved. A ceiling only enforced by the code that mints
+      // tokens is not a ceiling.
+      if (claims.gw_abs && Math.floor(Date.now() / 1000) >= Number(claims.gw_abs)) {
+        const e = errors.unauthorized('Invalid or expired token.');
+        e.expiredSession = true;
+        return next(e);
       }
 
       // A half-finished sign-in is NOT a sign-in.
@@ -394,6 +417,11 @@ function makeAdminAuth(logger) {
     }
 
     req.admin = user;
+    // The verified claims, for the sliding-window renewal in the admin router.
+    // Absent for the Basic-auth break-glass path, which carries no token and
+    // whose credentials the browser re-sends on every request anyway — an idle
+    // timeout is not a thing that can be applied to HTTP Basic.
+    req.adminClaims = claims || null;
     logger?.info(
       {
         requestId: req.id,

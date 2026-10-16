@@ -137,6 +137,16 @@ html.navmin .navgrp-top{display:none}
 html.navmin .navgrp-kids{grid-template-rows:1fr}
 html.navmin .navgrp-kids>a{margin-left:0;padding-left:0;border-left:0;
   border-radius:var(--r)}
+/* ---------- idle timeout warning ---------- */
+.idlewarn{position:fixed;right:18px;bottom:18px;z-index:60;width:300px;
+  background:var(--surface);border:1px solid var(--red);border-left:3px solid var(--red);
+  border-radius:var(--r-lg);padding:14px 16px;box-shadow:0 8px 28px rgba(0,0,0,.16)}
+.idlewarn .iw-t{font-size:13px;font-weight:600;color:var(--ink)}
+.idlewarn .iw-t b{font-variant-numeric:tabular-nums;color:var(--red)}
+.idlewarn .iw-s{margin:5px 0 11px;font-size:11.5px;color:var(--ink3);line-height:1.5}
+.idlewarn button{width:100%}
+@media(max-width:560px){.idlewarn{left:14px;right:14px;width:auto}}
+
 .who{padding:13px 16px;border-top:1px solid var(--border);font-size:11.5px}
 .who .em{display:block;color:var(--ink);font-weight:500;overflow:hidden;
   text-overflow:ellipsis;white-space:nowrap}
@@ -448,6 +458,7 @@ function layout({ title, admin, current, body, flash }) {
 <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>${STYLE}</style>
 <script>
+window.__gwIdleSeconds = ${Number(require('./session').idleSeconds()) || 1800};
 /* Applied BEFORE the first paint. Setting this after load would render the
    sidebar at full width and then snap it narrow, which reads as a glitch every
    single time. Wrapped because storage throws rather than returning null in a
@@ -498,6 +509,81 @@ try { if (localStorage.getItem('gw_nav') === 'min') document.documentElement.cla
     try { localStorage.setItem('gw_nav', min ? 'min' : 'full'); } catch (e) {}
     paint();
   });
+})();
+
+/* Idle timeout warning.
+   The console has forms people spend real time in — a response whitelist, an
+   application's alert list. Being signed out mid-edit without warning loses
+   that work, and the first time it happens somebody starts keeping a second
+   tab open just to stay alive, which defeats the timeout entirely.
+
+   The countdown starts at page load, because loading the page IS a request
+   and therefore the moment the server last slid the window. Navigating
+   reloads and restarts it; sitting in a form does not, which is exactly the
+   case this exists for.
+
+   A corner card, not a modal: a modal that steals focus from the field being
+   typed into is its own kind of data loss. Nothing auto-renews — staying
+   signed in is a decision, and a page that quietly pinged itself awake would
+   turn a 30-minute timeout into no timeout at all. */
+(function () {
+  var W = window.__gwIdleSeconds;
+  /* Below half a minute a warning has nowhere to live — it would appear and
+     the session would end before anyone read it. Above that, warn at a
+     quarter of the window, capped at two minutes: long enough to finish a
+     sentence, short enough that the card is not on screen for a tenth of the
+     working day. (The first version bailed below 120s, which silently
+     disabled the warning for every window under two minutes — including every
+     short window anyone would configure to test it.) */
+  if (!W || W < 30) return;
+  var WARN_AT = Math.max(10, Math.min(120, Math.floor(W / 4)));
+  var deadline = Date.now() + W * 1000;
+  var card, count, timer;
+
+  function fmt(s) {
+    var m = Math.floor(s / 60);
+    return m + ':' + String(s % 60).padStart(2, '0');
+  }
+
+  function build() {
+    card = document.createElement('div');
+    card.className = 'idlewarn';
+    card.setAttribute('role', 'alertdialog');
+    card.setAttribute('aria-live', 'assertive');
+    card.innerHTML =
+      '<div class="iw-t">Signing you out in <b id="iw-c"></b></div>' +
+      '<p class="iw-s">You have been inactive. Anything typed and not saved will be lost.</p>' +
+      '<button type="button" class="primary" id="iw-stay">Stay signed in</button>';
+    document.body.appendChild(card);
+    count = card.querySelector('#iw-c');
+    card.querySelector('#iw-stay').addEventListener('click', function () {
+      /* The ping goes through the same auth middleware as any other request,
+         so the server slides the window as a side effect. No special path and
+         no second way to extend a session. */
+      fetch('/admin/session/ping', { credentials: 'same-origin' })
+        .then(function (r) {
+          if (!r.ok) throw new Error('expired');
+          deadline = Date.now() + W * 1000;
+          card.remove();
+          card = null;
+        })
+        .catch(function () { expire(); });
+    });
+  }
+
+  function expire() {
+    clearInterval(timer);
+    var here = location.pathname + location.search;
+    location.href = '/admin/login?timeout=1&next=' + encodeURIComponent(here);
+  }
+
+  timer = setInterval(function () {
+    var left = Math.round((deadline - Date.now()) / 1000);
+    if (left <= 0) return expire();
+    if (left > WARN_AT) return;
+    if (!card) build();
+    count.textContent = fmt(left);
+  }, 1000);
 })();
 
 /* Nav groups. A group holding the current page is rendered open by the server

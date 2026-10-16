@@ -21,7 +21,20 @@ function esc(s) {
   );
 }
 
-function render({ error = '', title = '', email = '', brand: b = null } = {}) {
+/**
+ * `notice` is for things that are not failures — chiefly "you were signed out
+ * after 30 minutes". Separate from `error` because they are different events
+ * and deserve different weight: being timed out is normal and expected, and
+ * painting it the same red as "wrong password" tells people they did something
+ * wrong when they did not.
+ *
+ * `next` survives the round trip so a timed-out administrator lands back on
+ * the page they were reading rather than on the Overview. It is written into
+ * a hidden field, never into an href, and the server re-validates it as a
+ * same-site /admin path before using it — an open redirect on a sign-in form
+ * is a phishing primitive.
+ */
+function render({ error = '', notice = '', next = '', title = '', email = '', brand: b = null } = {}) {
   // Name and tagline arrive as two values, from the settings an administrator
   // owns. They used to be one string that this function split by stripping a
   // trailing "API Gateway" — which produced the right answer only for names
@@ -83,6 +96,11 @@ function render({ error = '', title = '', email = '', brand: b = null } = {}) {
   button:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
   .err{background:var(--red-lt);color:var(--red);border:1px solid var(--red);
     border-radius:var(--r);padding:10px 12px;margin-bottom:17px;font-size:12.5px}
+  /* Deliberately not red. Being timed out is normal, and dressing it as a
+     failure makes people hunt for what they did wrong. */
+  .note{background:var(--surface2);color:var(--ink2);border:1px solid var(--border);
+    border-radius:var(--r);padding:10px 12px;margin-bottom:17px;font-size:12.5px;
+    line-height:1.5}
   .foot{margin:21px 0 0;padding-top:15px;border-top:1px solid var(--border);
     color:var(--ink3);font-size:11px;text-align:center}
 </style>
@@ -97,8 +115,10 @@ function render({ error = '', title = '', email = '', brand: b = null } = {}) {
     <p class="sub">Sign in to manage vendors and endpoints.</p>
 
     ${error ? `<div class="err" role="alert">${esc(error)}</div>` : ''}
+    ${notice && !error ? `<div class="note" role="status">${esc(notice)}</div>` : ''}
 
     <form method="post" action="/admin/login" autocomplete="on">
+      ${next ? `<input type="hidden" name="next" value="${esc(next)}">` : ''}
       <label for="email">Email</label>
       <input id="email" name="email" type="email" required autofocus
              autocomplete="username" value="${esc(email)}" spellcheck="false">
