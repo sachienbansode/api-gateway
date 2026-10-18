@@ -25,6 +25,155 @@ const { esc, layout, pageHead, panel, tablePanel, fmtDate } = require('./ui');
  * as a state with a timestamp, so the screen can answer "does this work"
  * without anyone pressing anything.
  */
+/**
+ * Single sign-on through the Ashika Portal.
+ *
+ * Two panels, because they answer two different questions: where the portal
+ * is, and what its roles mean here. Keeping them in one form would mean a
+ * typo in a role mapping blocks a URL correction from saving.
+ *
+ * The client secret is write-only. There is no reveal here and no masked
+ * value — the box is blank, blank means keep, and clearing is its own button.
+ * A settings screen that can show a secret is a settings screen that leaks one
+ * the first time somebody screenshots it for a ticket.
+ */
+function ssoPanel(sso, roles, canEdit) {
+  const s = sso || {};
+  const insecure = s.base_url && !/^https:/i.test(s.base_url);
+
+  const state = !s.enabled
+    ? `<span class="badge mute">off</span>`
+    : s.test_status === 'ok'
+      ? `<span class="badge ok">on, portal reachable</span>`
+      : s.test_status === 'failed'
+        ? `<span class="badge off">on, last test failed</span>`
+        : `<span class="badge warn">on, not tested</span>`;
+
+  const secretState = s.secret_stored
+    ? `<span class="badge ok">stored <span style="text-transform:none">${
+        esc('••••' + String(s.secret_hint || ''))}</span></span>`
+    : s.use_pkce
+      ? `<span class="badge ok">not needed — using PKCE</span>`
+      : `<span class="badge warn">not set</span>`;
+
+  const settings = panel(
+    'Ashika Portal',
+    'Where people sign in. The portal proves who somebody is; the role mapping below decides what they may do here.',
+    `<form method="post" action="/admin/settings/sso">
+  <p class="hint" style="margin:0 0 12px">${state}
+    ${s.last_tested_at ? ` Last tested ${fmtDate(s.last_tested_at)}.` : ''}
+    ${s.test_status === 'failed' && s.test_error
+      ? `<br><span style="color:var(--red)">${esc(s.test_error)}</span>` : ''}</p>
+
+  ${insecure ? `<p class="warnbox">This portal URL is plain <span class="mono">http://</span>.
+    The authorization code and the access token cross the network in clear, and anyone who can
+    read that traffic can become an administrator of this gateway. Acceptable for a staging
+    portal on an internal network — it must not reach production.</p>` : ''}
+
+  <div class="fields">
+    <div class="f"><label for="sso_base">Portal URL</label>
+      <input id="sso_base" name="base_url" value="${esc(s.base_url || '')}"
+        placeholder="https://portal.ashikagroup.com/api/sso" ${canEdit ? '' : 'disabled'}>
+      <p class="hint">The base. <span class="mono">/authorize</span>,
+        <span class="mono">/token</span>, <span class="mono">/userinfo</span> and
+        <span class="mono">/profile</span> hang off it.</p></div>
+
+    <div class="f"><label for="sso_client">Client ID</label>
+      <input id="sso_client" name="client_id" value="${esc(s.client_id || '')}"
+        placeholder="pravah-api-gateway" ${canEdit ? '' : 'disabled'}>
+      <p class="hint">As registered with the portal.</p></div>
+
+    <div class="f"><label for="sso_redirect">Redirect URI</label>
+      <input id="sso_redirect" name="redirect_uri" value="${esc(s.redirect_uri || '')}"
+        placeholder="https://pravah.ashikagroup.com/api/auth/central/callback"
+        ${canEdit ? '' : 'disabled'}>
+      <p class="hint">Must match what the portal registered <strong>exactly</strong> —
+        scheme, port and trailing slash included. A mismatch here is the most common
+        reason an SSO integration fails, usually with an unhelpful error. The portal's
+        External Applications screen shows the registered value; copy it from there
+        rather than typing it.</p></div>
+
+    <div class="f"><label for="sso_secret">Client secret ${secretState}</label>
+      <input id="sso_secret" name="client_secret" type="password" autocomplete="new-password"
+        placeholder="${s.secret_stored ? 'leave blank to keep the stored one' : 'paste it here'}"
+        ${canEdit ? '' : 'disabled'}>
+      <p class="hint">Sealed with the same key as the supplier credentials and never
+        shown again. Blank means keep.
+        ${s.secret_stored && canEdit
+          ? ` <button type="submit" formaction="/admin/settings/sso/secret/clear"
+                class="linkbtn" data-confirm="Forget the stored client secret?"
+                data-confirm-body="Sign-in through the portal will stop working until a new one is saved.">Forget it</button>`
+          : ''}</p></div>
+  </div>
+
+  <label class="chk"><input type="checkbox" name="use_pkce" value="1"
+    ${s.use_pkce ? 'checked' : ''} ${canEdit ? '' : 'disabled'}>
+    <span>This is a public client — use PKCE instead of a secret</span></label>
+
+  <label class="chk"><input type="checkbox" name="allow_insecure" value="1"
+    ${s.allow_insecure ? 'checked' : ''} ${canEdit ? '' : 'disabled'}>
+    <span>Allow a plain <span class="mono">http://</span> portal (staging only)</span></label>
+
+  <label class="chk"><input type="checkbox" name="enabled" value="1"
+    ${s.enabled ? 'checked' : ''} ${canEdit ? '' : 'disabled'}>
+    <span>Offer "Sign in with Ashika Portal" on the sign-in page</span></label>
+  <p class="hint">Password sign-in keeps working either way. Leave it on until the
+    portal has signed somebody in successfully — if SSO is the only door and the
+    portal is misconfigured, nobody can reach this screen to fix it.</p>
+
+  <div class="formfoot">
+    <button type="submit" class="primary"${canEdit ? '' : ' disabled'}>Save</button>
+    <button type="submit" formaction="/admin/settings/sso/test"
+      ${canEdit ? '' : 'disabled'}>Test the portal</button>
+    <p class="hint">Test saves first, then calls the portal <strong>from this
+      server</strong> — the only machine that can reach it — and reports what each
+      endpoint returned. Field names only, never values.</p>
+  </div>
+</form>`
+  );
+
+  const rows = roles.map((r) => `<tr>
+    <td class="t1">${esc(r.portal_role)}</td>
+    <td><span class="badge ${r.level === 'none' ? 'off' : r.level === 'view' ? 'mute' : 'ok'}">${esc(r.level)}</span></td>
+    <td class="t2">${esc(r.notes || '')}</td>
+    <td class="actions">${canEdit ? `<form method="post" action="/admin/settings/sso/role/remove" class="inline">
+      <input type="hidden" name="portal_role" value="${esc(r.portal_role)}">
+      <button type="submit" class="linkbtn"
+        data-confirm="Unmap ${esc(r.portal_role)}?"
+        data-confirm-body="Anyone whose portal role is ${esc(r.portal_role)} will be refused, and told that their role has no access here.">Remove</button>
+    </form>` : ''}</td></tr>`).join('');
+
+  const mapping = panel(
+    'What a portal role means here',
+    'The portal says who somebody is. This says what they may do. A role with no row here is refused and told so by name.',
+    `<div class="wrap"><table>
+  <thead><tr><th>Portal role</th><th>Access here</th><th>Notes</th><th></th></tr></thead>
+  <tbody>${rows || '<tr><td colspan="4" class="empty">No roles mapped. Nobody could sign in through the portal.</td></tr>'}</tbody>
+</table></div>
+${canEdit ? `<form method="post" action="/admin/settings/sso/role" class="addrole">
+  <div class="f"><label for="pr">Portal role</label>
+    <input id="pr" name="portal_role" required placeholder="API Admin"></div>
+  <div class="f"><label for="pl">Access here</label>
+    <select id="pl" name="level">
+      <option value="view">view — read every screen, change nothing</option>
+      <option value="edit">edit — change the catalogue, applications and settings</option>
+      <option value="admin">admin — edit, plus the audited credential reveal</option>
+      <option value="none">none — recognised, but refused</option>
+    </select></div>
+  <div class="f"><label for="pn">Notes</label>
+    <input id="pn" name="notes" placeholder="optional"></div>
+  <div class="f acts"><button type="submit" class="primary">Add or update</button></div>
+</form>` : ''}`
+  );
+
+  const probe = s.test_detail
+    ? panel('What the portal returned', 'From the last test. Field names and types only — never a value.',
+        `<pre class="probe">${esc(JSON.stringify(s.test_detail, null, 2))}</pre>`)
+    : '';
+
+  return settings + mapping + probe;
+}
+
 function mailPanel(mail, canEdit) {
   const m = mail || {};
   const tested = m.test_status === 'ok'
@@ -114,7 +263,7 @@ function mailPanel(mail, canEdit) {
   );
 }
 
-function render({ admin, flash, settings, history, mail }) {
+function render({ admin, flash, settings, history, mail, sso, ssoRoles }) {
   const list = Object.values(settings).sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
 
   const sourceBadge = (s) => s.source === 'console'
@@ -151,6 +300,7 @@ ${pageHead('Admin config', 'Settings that belong to the product rather than to t
 <div class="tabs" role="tablist">
   <button type="button" role="tab" data-tab="general" aria-selected="true">General</button>
   <button type="button" role="tab" data-tab="mail" aria-selected="false">Mail</button>
+  <button type="button" role="tab" data-tab="sso" aria-selected="false">Single sign-on</button>
   <button type="button" role="tab" data-tab="secrets" aria-selected="false">Kept in the env file</button>
   <button type="button" role="tab" data-tab="history" aria-selected="false">Change history</button>
 </div>
@@ -170,6 +320,10 @@ ${pageHead('Admin config', 'Settings that belong to the product rather than to t
 
 <section class="tabpane hidden" id="tab-mail">
 ${mailPanel(mail, admin.canEdit)}
+</section>
+
+<section class="tabpane hidden" id="tab-sso">
+${ssoPanel(sso, ssoRoles || [], admin.canEdit)}
 </section>
 
 <section class="tabpane hidden" id="tab-secrets">
@@ -257,6 +411,23 @@ document.querySelectorAll('.preset').forEach(function (b) {
   text-transform:none;letter-spacing:0;color:var(--ink);cursor:pointer}
 .chk input{width:auto;margin:0}
 .preset{font-size:11.5px;padding:5px 10px}
+
+/* ---------- single sign-on ---------- */
+/* Amber, not red: a staging portal on plain HTTP is a decision somebody made,
+   not a fault. Red here would be indistinguishable from a real failure. */
+.warnbox{background:var(--surface2);border:1px solid var(--border);
+  border-left:3px solid #fab219;border-radius:var(--r);padding:10px 13px;
+  margin:0 0 14px;font-size:12px;color:var(--ink2);line-height:1.55;
+  text-transform:none;letter-spacing:0;font-weight:400}
+.linkbtn{background:none;border:0;padding:0;color:var(--blue);font-size:inherit;
+  font-family:inherit;cursor:pointer;text-decoration:underline;width:auto}
+.linkbtn:hover{background:none;color:var(--ink)}
+form.inline{display:inline;margin:0}
+.addrole{display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-top:14px;
+  padding-top:14px;border-top:1px solid var(--border)}
+.addrole .f{margin:0;flex:1;min-width:150px}
+.addrole .acts{flex:none}
+.probe{max-height:420px;overflow:auto;font-size:11px;line-height:1.5;margin:0}
 .cfg{display:grid;grid-template-columns:260px 1fr;gap:0;margin:0}
 .cfg dt{padding:9px 0;font-family:var(--mono);font-size:11.5px;color:var(--ink);
   border-bottom:1px solid var(--border)}

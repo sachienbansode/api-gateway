@@ -18,6 +18,8 @@ const {
 const db = require('../db/pool');
 const vendorRepo = require('../db/repos/vendors');
 const appRepo = require('../db/repos/applications');
+const ssoRepo = require('../db/repos/sso');
+const ssoProbe = require('./ssoProbe');
 const applicationsPage = require('./applicationsPage');
 const auditRepo = require('../db/repos/audit');
 const quotaRepo = require('../db/repos/quota');
@@ -593,6 +595,90 @@ function buildAdminRouter(logger, deps = {}) {
    * It cannot outlive the absolute ceiling either: renew() refuses once
    * gw_abs is reached, so a tab pinging every 29 minutes still ends at 8 hours.
    */
+  // -------------------------------------------------------------------------
+  // Single sign-on settings
+  //
+  // Save, test, and the role mapping. The sign-in FLOW is separate and comes
+  // once the portal's contract is confirmed — the probe below is what
+  // confirms it, from the only machine that can reach the portal.
+  // -------------------------------------------------------------------------
+  const ssoBack = (msg, kind = 'ok') =>
+    '/admin/settings?' + kind + '=' + encodeURIComponent(msg) + '#sso';
+
+  const ssoInput = (b) => ({
+    enabled: b.enabled === '1',
+    baseUrl: b.base_url,
+    clientId: b.client_id,
+    clientSecret: b.client_secret,
+    redirectUri: b.redirect_uri,
+    usePkce: b.use_pkce === '1',
+    allowInsecure: b.allow_insecure === '1',
+  });
+
+  router.post('/settings/sso', async (req, res) => {
+    if (!req.admin.canEdit) return res.redirect(303, ssoBack('Your role is read-only here.', 'err'));
+    try {
+      await ssoRepo.save(ssoInput(req.body || {}), req.admin.email);
+      logger.info({ actor: req.admin.email }, 'sso settings changed');
+      res.redirect(303, ssoBack('Saved. Press "Test the portal" before switching it on.'));
+    } catch (err) {
+      res.redirect(303, ssoBack(err.message, 'err'));
+    }
+  });
+
+  router.post('/settings/sso/secret/clear', async (req, res) => {
+    if (!req.admin.canEdit) return res.redirect(303, ssoBack('Your role is read-only here.', 'err'));
+    try {
+      await ssoRepo.clearSecret(req.admin.email);
+      logger.warn({ actor: req.admin.email }, 'sso client secret cleared');
+      res.redirect(303, ssoBack('Forgotten. Portal sign-in will not work until a new one is saved.'));
+    } catch (err) {
+      res.redirect(303, ssoBack(err.message, 'err'));
+    }
+  });
+
+  router.post('/settings/sso/test', async (req, res) => {
+    if (!req.admin.canEdit) return res.redirect(303, ssoBack('Your role is read-only here.', 'err'));
+    try {
+      // Save first: testing what is on screen rather than what is stored is
+      // how somebody ends up with a green tick against settings they never
+      // saved, then wonders why sign-in fails after a restart.
+      await ssoRepo.save(ssoInput(req.body || {}), req.admin.email);
+      const { ok, detail, notes } = await ssoProbe.probe();
+      await ssoRepo.recordTest({ ok, error: ok ? null : 'the portal could not be reached', detail });
+      logger.info({ actor: req.admin.email, ok }, 'sso portal probed');
+      res.redirect(303, ssoBack(ok
+        ? `The portal answered. ${notes.length ? notes[0] : 'See what it returned below.'}`
+        : 'Nothing answered from this server. Check the URL and the network path.',
+        ok ? 'ok' : 'err'));
+    } catch (err) {
+      await ssoRepo.recordTest({ ok: false, error: err.message }).catch(() => {});
+      res.redirect(303, ssoBack(err.message, 'err'));
+    }
+  });
+
+  router.post('/settings/sso/role', async (req, res) => {
+    if (!req.admin.canEdit) return res.redirect(303, ssoBack('Your role is read-only here.', 'err'));
+    try {
+      const b = req.body || {};
+      await ssoRepo.setRole(
+        { portalRole: b.portal_role, level: b.level, notes: b.notes }, req.admin.email);
+      res.redirect(303, ssoBack(`"${b.portal_role}" now grants ${b.level} here.`));
+    } catch (err) {
+      res.redirect(303, ssoBack(err.message, 'err'));
+    }
+  });
+
+  router.post('/settings/sso/role/remove', async (req, res) => {
+    if (!req.admin.canEdit) return res.redirect(303, ssoBack('Your role is read-only here.', 'err'));
+    try {
+      await ssoRepo.removeRole((req.body || {}).portal_role, req.admin.email);
+      res.redirect(303, ssoBack('Unmapped. Anyone with that portal role will now be refused.'));
+    } catch (err) {
+      res.redirect(303, ssoBack(err.message, 'err'));
+    }
+  });
+
   router.get('/session/ping', (req, res) => {
     res.set('Cache-Control', 'no-store').json({
       ok: true,
@@ -986,12 +1072,16 @@ function buildAdminRouter(logger, deps = {}) {
 
   router.get('/settings', async (req, res, next) => {
     try {
-      const [settings, history, mail] = await Promise.all([
+      const [settings, history, mail, sso, ssoRoles] = await Promise.all([
         settingsRepo.all(), settingsRepo.history(20),
         mailRepo.status().catch(() => null),
+        ssoRepo.status().catch(() => null),
+        ssoRepo.roles().catch(() => []),
       ]);
       res.type('html').send(
-        settingsPage.render({ admin: req.admin, flash: flashOf(req), settings, history, mail })
+        settingsPage.render({
+          admin: req.admin, flash: flashOf(req), settings, history, mail, sso, ssoRoles,
+        })
       );
     } catch (err) { next(err); }
   });
