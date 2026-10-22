@@ -389,6 +389,58 @@ function shapeOf(body) {
   return shape;
 }
 
+/**
+ * Path, type and ONE sample value per field.
+ *
+ * The sample is the point. Picking fields from a list of dotted paths means
+ * choosing blind: `dpCode` and `dpAccount` look like two different things
+ * until you see that both hold 00061535, and `poa` means nothing until you
+ * see it is "Y". On a supplier response with a hundred near-identical names
+ * that is the difference between understanding the payload and guessing.
+ *
+ * NOT A NEW EXPOSURE. Whoever is in the Studio has already run the call in
+ * step 1 and is looking at the whole response body on the same screen. This
+ * moves a value they can already see next to the decision it informs.
+ *
+ * NEVER PERSISTED. Samples travel from the live test to the browser and stop
+ * there. Nothing writes them to the database — not with the endpoint, not in
+ * the discovered-fields cache — because this gateway does not keep supplier
+ * data, and a "helpful" cached sample of a demat account number would be
+ * exactly that.
+ */
+function describe(body, { max = 400 } = {}) {
+  const out = [];
+  for (const path of discover(body).slice(0, max)) {
+    out.push({ path, type: typeAt(body, path), sample: sampleAt(body, path) });
+  }
+  return out;
+}
+
+const SAMPLE_MAX = 32;
+
+/** The first real value at a path, shortened for a table cell. */
+function sampleAt(node, path) {
+  let cur = node;
+  for (const seg of String(path).split('.')) {
+    if (cur === null || cur === undefined) return null;
+    const key = seg.replace(/\[\]$/, '');
+    if (key) {
+      if (Array.isArray(cur)) cur = cur.length ? cur[0] : undefined;
+      if (cur === null || typeof cur !== 'object') return null;
+      cur = cur[key];
+    }
+    if (seg.endsWith('[]') && Array.isArray(cur)) cur = cur.length ? cur[0] : undefined;
+  }
+  if (cur === null) return 'null';
+  if (cur === undefined) return null;
+  if (typeof cur === 'object') return Array.isArray(cur) ? `[${cur.length}]` : '{…}';
+  const s = String(cur);
+  // Truncated rather than hidden: the first characters are what make a field
+  // recognisable, and a whole description or address in a table cell would
+  // push every other column off the screen.
+  return s.length > SAMPLE_MAX ? s.slice(0, SAMPLE_MAX) + '…' : s;
+}
+
 /** Walk a dotted/[]-suffixed path far enough to name the type at its leaf. */
 function typeAt(node, path) {
   let cur = node;
@@ -442,5 +494,6 @@ function project({ mode, fields = [], exclude = [], rename = {} }, body) {
 }
 
 module.exports = {
+  describe, sampleAt,
   callUpstream, fillPath, discover, shapeOf, project, resolveRef, authFor, probeOrigin,
 };

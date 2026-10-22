@@ -78,6 +78,20 @@ const STUDIO_CSS = `
 .fieldbox th{position:sticky;top:0;z-index:1}
 .fieldbox td{padding:5px 10px}
 .fieldbox tr.off td{opacity:.5}
+/* A group heading. Says the shared prefix once so every row below can show
+   only the part that differs. */
+.fieldbox tr.grp td{background:var(--surface2);font-weight:600;color:var(--ink2);
+  border-top:1px solid var(--border);padding-top:7px;padding-bottom:7px}
+.fieldbox tr.grp td.grp-name{letter-spacing:.01em}
+/* The rail that makes a row read as belonging to the heading above it. */
+.fieldbox tr.child td:nth-child(2){padding-left:22px;position:relative}
+.fieldbox tr.child td:nth-child(2):before{content:"";position:absolute;left:10px;top:0;bottom:0;
+  border-left:1px solid var(--border)}
+/* The value column. Monospace so 00061535 and 00061535 line up character for
+   character — seeing that two fields carry the same value is the whole point. */
+.fieldbox td.sample{font-family:var(--mono);font-size:11px;color:var(--ink);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:0}
+.fieldbox td.sample.nosample{color:var(--ink3)}
 .fieldbox tr.new td:first-child:before{content:"NEW";font-size:8.5px;font-weight:700;color:var(--gold);
   background:var(--gold-lt);border-radius:3px;padding:1px 4px;margin-right:6px}
 .tools{display:flex;gap:8px;align-items:center;margin-bottom:9px;flex-wrap:wrap}
@@ -417,8 +431,8 @@ function render({ admin, bootstrap, flash }) {
           </div>
           <div class="fieldbox">
             <table><thead><tr>
-              <th style="width:32px"></th><th>Field</th><th style="width:15%">Type</th>
-              <th style="width:17%">Rename to</th><th>Meaning</th>
+              <th style="width:32px"></th><th>Field</th><th style="width:11%">Type</th>
+              <th style="width:26%">Value in the last test</th><th style="width:17%">Rename to</th>
             </tr></thead><tbody id="fieldRows"></tbody></table>
           </div>
           <p class="hint" id="fieldHint" style="margin-top:8px"></p>

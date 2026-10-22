@@ -487,8 +487,11 @@ function json(logger, deps = {}) {
         { upstream: upstream.name, status: result.status, ms: result.ms, actor: req.admin.email },
         'studio: upstream test'
       );
-      // The sample body goes back to the admin's own browser and no further.
-      res.json({ result, fields });
+      // The sample body goes back to the admin's own browser and no further,
+      // and so does `described` — path, type and one sample value per field.
+      // The sample is what makes a hundred near-identical supplier field names
+      // pickable; it is held in the page and never written anywhere.
+      res.json({ result, fields, described: result.body ? tester.describe(result.body) : [] });
     } catch (err) { fail(res, next)(err); }
   });
 

@@ -29,6 +29,7 @@
     mode: 'whitelist',
     lastSample: null,    // body from the most recent step-1 test
     discovered: [],
+    described: {},
     dirty: false,
     filter: ''
   };
@@ -431,6 +432,12 @@
       if (r.body !== undefined && r.body !== null) {
         S.lastSample = r.body;
         S.discovered = j.fields || [];
+        // path -> {type, sample}. Held in the page only, never saved.
+        S.described = {};
+        (j.described || []).forEach(function (d) {
+          S.described[d.path] = { type: d.type, sample: d.sample };
+        });
+        renderFields();
         show($('s1box'), true);
         $('s1json').textContent = pretty(r.body);
         $('s1meta').textContent = (j.fields || []).length + ' leaf fields';
@@ -811,21 +818,75 @@
       return !q || f.path.toLowerCase().indexOf(q) !== -1 ||
         (f.description || '').toLowerCase().indexOf(q) !== -1;
     });
+    // GROUPED BY PARENT, and the prefix said once.
+    //
+    // A supplier response is rarely flat. An account list arrives as
+    // data[].dpId, data[].dpName, data[].dpAccount … and a flat list of fifty
+    // of those is fifty rows that begin with the same eleven characters, with
+    // the part that differs pushed to where the eye is not looking. Grouping
+    // states `data[]` once as a heading and leaves each row showing only what
+    // makes it itself.
+    var groups = {}, order = [];
     shown.forEach(function (f) {
-      var tr = el('tr', { class: (f.exposed ? '' : 'off ') + (f.discovered ? 'new' : '') });
-      var cb = el('input', { type: 'checkbox' });
-      cb.checked = !!f.exposed;
-      cb.addEventListener('change', function () {
-        f.exposed = cb.checked; S.dirty = true; renderFields();
+      var i = f.path.lastIndexOf('.');
+      var parent = i === -1 ? '' : f.path.slice(0, i);
+      if (!groups[parent]) { groups[parent] = []; order.push(parent); }
+      groups[parent].push(f);
+    });
+
+    order.forEach(function (parent) {
+      var rows = groups[parent];
+      if (parent) {
+        var on = rows.filter(function (f) { return f.exposed; }).length;
+        var head = el('tr', { class: 'grp' });
+        var tick = el('input', { type: 'checkbox' });
+        tick.checked = on === rows.length;
+        // Indeterminate when a group is part-chosen: unticked would claim
+        // nothing in it is exposed, which on a long list is a lie you act on.
+        tick.indeterminate = on > 0 && on < rows.length;
+        tick.addEventListener('change', function () {
+          rows.forEach(function (f) { f.exposed = tick.checked; });
+          S.dirty = true; renderFields();
+        });
+        head.appendChild(el('td', {}, [tick]));
+        head.appendChild(el('td', { class: 'mono grp-name', colspan: '4',
+          text: parent + (parent.slice(-2) === '[]' ? '  — one per item in the list' : '') +
+            '   ·   ' + on + ' of ' + rows.length }));
+        tb.appendChild(head);
+      }
+
+      rows.forEach(function (f) {
+        var tr = el('tr', { class: (f.exposed ? '' : 'off ') + (f.discovered ? 'new' : '') +
+          (parent ? ' child' : '') });
+        var cb = el('input', { type: 'checkbox' });
+        cb.checked = !!f.exposed;
+        cb.addEventListener('change', function () {
+          f.exposed = cb.checked; S.dirty = true; renderFields();
+        });
+        tr.appendChild(el('td', {}, [cb]));
+
+        var leaf = parent ? f.path.slice(parent.length + 1) : f.path;
+        var nameCell = el('td', { class: 'mono' });
+        nameCell.appendChild(el('span', { class: 'leaf', text: leaf }));
+        nameCell.title = f.path;
+        tr.appendChild(nameCell);
+
+        var d = (S.described || {})[f.path] || {};
+        tr.appendChild(el('td', { class: 't2', text: f.data_type || d.type || '—' }));
+
+        // The sample is why this column exists. Two fields called dpAccount
+        // and dpCode look like two things until both show 00061535.
+        var sample = d.sample;
+        tr.appendChild(el('td', {
+          class: 'sample' + (sample === null || sample === undefined ? ' nosample' : ''),
+          text: sample === null || sample === undefined ? '—' : sample,
+        }));
+
+        var rn = el('input', { value: f.rename_to || '', placeholder: '—' });
+        rn.addEventListener('input', function () { f.rename_to = rn.value || null; S.dirty = true; });
+        tr.appendChild(el('td', {}, [rn]));
+        tb.appendChild(tr);
       });
-      tr.appendChild(el('td', {}, [cb]));
-      tr.appendChild(el('td', { class: 'mono', text: f.path }));
-      tr.appendChild(el('td', { class: 't2', text: f.data_type || '—' }));
-      var rn = el('input', { value: f.rename_to || '', placeholder: '—' });
-      rn.addEventListener('input', function () { f.rename_to = rn.value || null; S.dirty = true; });
-      tr.appendChild(el('td', {}, [rn]));
-      tr.appendChild(el('td', { class: 't2', text: f.description || '' }));
-      tb.appendChild(tr);
     });
     if (!shown.length) {
       tb.appendChild(el('tr', {}, [el('td', { colspan: '5', class: 'empty',
@@ -882,7 +943,9 @@
       if (!have[p]) {
         // Arrives unticked on purpose: a field nobody has decided about is not
         // a field the consumer should be receiving.
-        S.fields.push({ path: p, exposed: false, discovered: true, data_type: null, description: null });
+        var d = (S.described || {})[p] || {};
+        S.fields.push({ path: p, exposed: false, discovered: true,
+          data_type: d.type || null, description: null });
         added++;
       }
     });
