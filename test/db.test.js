@@ -730,6 +730,53 @@ describe('database-backed gateway', { skip: !HAVE_DB ? 'set TEST_DATABASE_URL to
     assert.strictEqual(typeof apps.remove, 'undefined');
   });
 
+  test('a new application reaches the Catalogue dropdown without a second step', async () => {
+    // The bug this fixes: the Applications screen wrote gateway.upstreams
+    // while the Catalogue's Application filter reads gateway.applications.
+    // Two screens, the same word, different tables — so a supplier added on
+    // one was invisible on the other, and the two disagreed about the name of
+    // the thing they both showed.
+    const apps = require('../src/db/repos/applications');
+    const browse = require('../src/db/repos/browse');
+    const catalog = require('../src/db/repos/catalog');
+
+    await apps.save({
+      name: 'internal_crm', displayName: 'Internal CRM', vendorName: 'In-house',
+      owner: 'Platform Team', baseUrl: 'https://crm.internal.example.com',
+      timeoutMs: 20000, alertEmails: 'ops@ashikagroup.com', alertsEnabled: true,
+    }, 'tester');
+
+    const made = await apps.get('internal_crm');
+    assert.strictEqual(made.display_name, 'Internal CRM');
+    assert.strictEqual(made.upstream, 'internal_crm', 'the supplier row exists and is linked');
+    assert.strictEqual(made.base_url, 'https://crm.internal.example.com');
+
+    const codes = (await browse.facets()).applications.map((a) => a.code);
+    assert.ok(codes.includes('internal_crm'),
+      'one save, and it is in the filter — not "save here, then add it over there"');
+
+    // An update that does not carry base_url must not blank it: the form
+    // showing fewer columns than the table is how a screen destroys a field
+    // it has never heard of.
+    await apps.save({ name: 'internal_crm', displayName: 'Internal CRM (renamed)',
+      alertEmails: 'ops@ashikagroup.com', alertsEnabled: true }, 'tester');
+    const kept = await apps.get('internal_crm');
+    assert.strictEqual(kept.base_url, 'https://crm.internal.example.com');
+    assert.strictEqual(kept.display_name, 'Internal CRM (renamed)');
+
+    // Deactivating has to stop it SERVING, not merely hide it from the
+    // console. Both flags, checked through what the gateway actually serves.
+    await apps.setActive('internal_crm', false, 'tester', 'not live yet');
+    const off = await apps.get('internal_crm');
+    assert.strictEqual(off.enabled, false, 'hidden from the console');
+    assert.strictEqual(off.upstream_enabled, false, 'and stopped serving');
+    assert.ok(!(await catalog.toManifest()).upstreams.internal_crm);
+
+    await apps.setActive('internal_crm', true, 'tester', null);
+    assert.ok((await catalog.toManifest()).upstreams.internal_crm, 'serving again');
+    assert.strictEqual((await apps.get('internal_crm')).deactivated_reason, null);
+  });
+
   test('migrations are idempotent and detect tampering', async () => {
     const logger = { info: () => {}, warn: () => {}, error: () => {} };
     const again = await migrate(logger);

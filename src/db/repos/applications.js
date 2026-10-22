@@ -59,7 +59,7 @@ async function endpointsUnder(name) {
   const r = await db.query(
     `SELECT name, coalesce(nullif(display_name,''), name) AS display_name,
             method, path, status, enabled
-       FROM gateway.endpoints WHERE upstream = $1
+       FROM gateway.endpoints WHERE application = $1 OR upstream = $1
       -- Live first. Sorting on status alphabetically put drafts at the top,
       -- which is backwards: the live ones are what deactivating this would
       -- take out of service, and they are what somebody is here to look at.
@@ -78,48 +78,82 @@ async function endpointsUnder(name) {
  * through `setActive` and its own confirmation. A form that can do everything
  * is a form where the dangerous thing is one tab-press from the safe ones.
  */
+/**
+ * Create or update an application and its supplier API, together.
+ *
+ * ONE APPLICATION PER SUPPLIER — see migration 017. The two tables stay
+ * separate because every endpoint, every foreign key and the whole audit
+ * trail already point at them, but the console treats them as one record and
+ * so does this. Writing only one of them is how the Catalogue dropdown came
+ * to disagree with the Applications screen about what things are called.
+ *
+ * Deliberately NOT here: the credential, which belongs to the vault and has
+ * its own audited path; and `enabled`, which is a production action with
+ * consequences this form does not show and goes through setActive.
+ */
 async function save(row, actor) {
-  const name = String(row.name || '').trim().toLowerCase();
-  if (!/^[a-z0-9][a-z0-9_]*$/.test(name)) {
+  const code = String(row.name || '').trim().toLowerCase();
+  if (!/^[a-z0-9][a-z0-9_]*$/.test(code)) {
     throw new Error('Reference must be lowercase letters, digits and underscores.');
   }
   const emails = normaliseEmails(row.alertEmails);
   const bad = emails.find((e) => !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e));
   if (bad) throw new Error(`"${bad}" is not an email address.`);
 
-  const before = await rawRow(name);
+  const before = await get(code);
 
-  // An update must not blank the columns this form does not carry, so a
-  // create path and an update path rather than one upsert listing every
-  // column — the upsert is how a screen silently wipes a field it never knew
-  // about.
-  const res = before
-    ? await db.query(
+  // Both rows or neither. A half-written pair is the state that makes two
+  // screens disagree, which is the bug this whole migration exists to fix.
+  await db.transaction(async (client) => {
+    const q = (text, params) => client.query(text, params);
+    await q(
+      `INSERT INTO gateway.applications (code, name, description, owner_email, created_by)
+       VALUES ($1, $2, nullif($3,''), nullif($4,''), $5)
+       ON CONFLICT (code) DO UPDATE SET
+         name = EXCLUDED.name,
+         description = EXCLUDED.description,
+         owner_email = EXCLUDED.owner_email`,
+      [code, nz(row.displayName) || code, String(row.description || '').trim(),
+       String(row.owner || '').trim(), actor]
+    );
+
+    // An UPDATE that names only what the form carries, so a column this screen
+    // has never heard of cannot be blanked by saving it.
+    const existing = await q('SELECT name FROM gateway.upstreams WHERE name = $1', [code]);
+    if (existing.rows.length) {
+      await q(
         `UPDATE gateway.upstreams
-            SET display_name=$2, vendor_name=$3, owner=$4, notes=$5,
-                base_url=coalesce($6, base_url), timeout_ms=coalesce($7, timeout_ms),
-                alert_emails=$8, alerts_enabled=$9,
-                updated_at=now(), updated_by=$10
-          WHERE name=$1 RETURNING *`,
-        [name, nz(row.displayName), nz(row.vendorName), nz(row.owner), nz(row.notes),
+            SET display_name = $2, vendor_name = $3, owner = $4, notes = $5,
+                base_url = coalesce($6, base_url),
+                timeout_ms = coalesce($7, timeout_ms),
+                alert_emails = $8, alerts_enabled = $9,
+                application = $1, updated_at = now(), updated_by = $10
+          WHERE name = $1`,
+        [code, nz(row.displayName), nz(row.vendorName), nz(row.owner), nz(row.notes),
          nz(row.baseUrl), row.timeoutMs ? Number(row.timeoutMs) : null,
          emails, row.alertsEnabled !== false, actor]
-      )
-    : await db.query(
+      );
+    } else {
+      if (!String(row.baseUrl || '').trim()) {
+        throw new Error('A base URL is needed — it is where this supplier is called.');
+      }
+      await q(
         `INSERT INTO gateway.upstreams
            (name, base_url, timeout_ms, display_name, vendor_name, owner, notes,
-            alert_emails, alerts_enabled, updated_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
-        [name, String(row.baseUrl || '').trim(), Number(row.timeoutMs) || 15000,
+            alert_emails, alerts_enabled, application, updated_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$1,$10)`,
+        [code, String(row.baseUrl).trim(), Number(row.timeoutMs) || 15000,
          nz(row.displayName), nz(row.vendorName), nz(row.owner), nz(row.notes),
          emails, row.alertsEnabled !== false, actor]
       );
+    }
+  });
 
   await logChange({
-    actor, action: before ? 'update' : 'create', objectId: name,
-    before, after: res.rows[0],
+    actor, action: before ? 'update' : 'create', objectId: code,
+    before, after: await get(code),
   });
-  return res.rows[0];
+  return get(code);
 }
 
 /**
@@ -132,24 +166,38 @@ async function save(row, actor) {
  * names the affected endpoints first and why the reason is recorded.
  */
 async function setActive(name, active, actor, reason) {
-  const before = await rawRow(name);
-  if (!before) throw new Error(`No application called "${name}".`);
+  const code = String(name || '');
+  const before = await get(code);
+  if (!before) throw new Error(`No application called "${code}".`);
 
-  const res = await db.query(
-    `UPDATE gateway.upstreams
-        SET enabled = $2,
-            deactivated_at     = CASE WHEN $2 THEN NULL ELSE now() END,
-            deactivated_by     = CASE WHEN $2 THEN NULL ELSE $3 END,
-            deactivated_reason = CASE WHEN $2 THEN NULL ELSE $4 END,
-            updated_at = now(), updated_by = $3
-      WHERE name = $1 RETURNING *`,
-    [name, active, actor, reason ? String(reason).slice(0, 500) : null]
-  );
-  await logChange({
-    actor, action: active ? 'enable' : 'disable', objectId: name,
-    before, after: res.rows[0],
+  // BOTH flags. `applications.enabled` is what the Catalogue filter and the
+  // Studio picker read; `upstreams.enabled` is what the config loader checks
+  // before serving — it does `if (!u.enabled) continue` and then drops every
+  // endpoint whose upstream is missing. Setting only the first would hide the
+  // application from the console while it carried on answering consumers,
+  // which is the worst of both.
+  await db.transaction(async (client) => {
+    await client.query(
+      'UPDATE gateway.applications SET enabled = $2 WHERE code = $1',
+      [code, active]
+    );
+    await client.query(
+      `UPDATE gateway.upstreams
+          SET enabled = $2,
+              deactivated_at     = CASE WHEN $2 THEN NULL ELSE now() END,
+              deactivated_by     = CASE WHEN $2 THEN NULL ELSE $3 END,
+              deactivated_reason = CASE WHEN $2 THEN NULL ELSE $4 END,
+              updated_at = now(), updated_by = $3
+        WHERE name = $1 OR application = $1`,
+      [code, active, actor, reason ? String(reason).slice(0, 500) : null]
+    );
   });
-  return res.rows[0];
+
+  const after = await get(code);
+  await logChange({
+    actor, action: active ? 'enable' : 'disable', objectId: code, before, after,
+  });
+  return after;
 }
 
 /** Where an alert about this application should go, with its fallback. */
