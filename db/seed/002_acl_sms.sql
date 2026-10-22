@@ -1,5 +1,5 @@
 -- ===========================================================================
--- acl_sms.sql — onboard the ACL SMS gateway
+-- 002_acl_sms.sql — onboard the ACL SMS gateway
 --
 -- The live call this reproduces:
 --

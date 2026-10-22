@@ -1,9 +1,9 @@
 -- ===========================================================================
--- preflight.sql — is this database ready for the ACL seed?
+-- check_readiness.sql — is this database ready for the ACL seed?
 --
 -- WHY THIS EXISTS
 --
--- acl_sms.sql runs inside a transaction, so the FIRST failure aborts it and
+-- 002_acl_sms.sql runs inside a transaction, so the FIRST failure aborts it and
 -- every statement after reports the same thing:
 --
 --   ERROR: current transaction is aborted, commands ignored until end of
@@ -81,7 +81,7 @@ BEGIN
     INTO has_row;
   INSERT INTO preflight VALUES ('seed endpoint acl_send_sms',
     CASE WHEN has_row THEN 'ready' ELSE 'not yet' END,
-    'created by db/seed/acl_sms.sql');
+    'created by db/seed/002_acl_sms.sql');
 
   -- Only meaningful once 019 exists; referencing it sooner would make this
   -- script fail on precisely the databases it is meant to explain.
