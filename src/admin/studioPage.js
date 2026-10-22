@@ -220,7 +220,7 @@ function render({ admin, bootstrap, flash }) {
     crosses the boundary, and prove it — in one pass.</p>
 </div><div class="pg-actions">
   <a class="btn" href="/admin/endpoints">All endpoints</a>
-  <button type="button" class="primary" id="newEndpoint">New endpoint</button>
+  <a class="btn primary" href="/admin/onboard">New endpoint</a>
 </div></div>
 
 <div class="bar">

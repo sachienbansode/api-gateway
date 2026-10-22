@@ -21,6 +21,7 @@ const appRepo = require('../db/repos/applications');
 const ssoRepo = require('../db/repos/sso');
 const ssoProbe = require('./ssoProbe');
 const applicationsPage = require('./applicationsPage');
+const onboardPage = require('./onboardPage');
 const auditRepo = require('../db/repos/audit');
 const quotaRepo = require('../db/repos/quota');
 
@@ -1190,6 +1191,13 @@ function buildAdminRouter(logger, deps = {}) {
   const studioRoutes = require('./studioRoutes');
   router.use('/api', studioJson, studioGuard, studioRoutes.json(logger, deps));
   router.get('/studio.js', studioRoutes.script());
+  // The chooser sits in front of the wizard: what you are onboarding decides
+  // which questions are the right ones. /admin/studio keeps working on its own
+  // so every existing link and bookmark still lands where it did.
+  router.get('/onboard', (req, res) => {
+    res.type('html').send(onboardPage.render({ admin: req.admin, flash: flashOf(req) }));
+  });
+
   router.get('/studio', studioRoutes.page(logger, { flashOf }));
 
   router.get('/me', (req, res) => {

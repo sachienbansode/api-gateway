@@ -348,9 +348,18 @@
       }).catch(flashErr);
     });
   });
-  $('newEndpoint').addEventListener('click', function () {
-    guard(function () { loadEndpoint(null); });
-  });
+  // "New endpoint" is a link to the chooser now, not a button that clears the
+  // form in place. The guard still has to run, or unsaved work leaves without
+  // asking — so intercept, ask, and only then follow the link.
+  (function () {
+    var n = $('newEndpoint');
+    if (!n) return;
+    n.addEventListener('click', function (e) {
+      if (!S.dirty) return;                       // nothing to lose; let it go
+      e.preventDefault();
+      guard(function () { location.href = n.getAttribute('href') || '/admin/onboard'; });
+    });
+  })();
 
   // ---------------------------------------------------------------------
   // Step 1 — supplier
