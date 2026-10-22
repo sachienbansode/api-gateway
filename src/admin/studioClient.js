@@ -157,16 +157,115 @@
   // ---------------------------------------------------------------------
   // Step collapsing + rail
   // ---------------------------------------------------------------------
-  Array.prototype.forEach.call(document.querySelectorAll('[data-toggle]'), function (h) {
-    h.addEventListener('click', function () {
-      $(h.getAttribute('data-toggle')).classList.toggle('collapsed');
+  /**
+   * One step at a time.
+   *
+   * All four steps used to render at once — a single page about 1,900px tall,
+   * every field of every step on it, mandatory and optional indistinguishable,
+   * and no way to tell where you were except by scrolling. The four steps were
+   * already modelled; they were simply all open.
+   *
+   * Going FORWARD is gated on the step being complete, and the reason sits
+   * beside the button that is refusing — a disabled control with no
+   * explanation is the thing people file tickets about. Going BACK is never
+   * gated: you may always return to look at, or fix, what you already did.
+   */
+  var STEP_COUNT = 4;
+  S.step = 1;
+
+  function val(id) { var n = $(id); return n ? String(n.value || '').trim() : ''; }
+
+  /** Is this step done, and if not, what exactly is missing? */
+  function stepReady(n) {
+    if (n === 1) {
+      if (!S.upstream || !S.upstream.name) {
+        return { ok: false, why: 'Save the supplier API first — step 2 attaches your ' +
+          'endpoint to one.' };
+      }
+      return { ok: true };
+    }
+    if (n === 2) {
+      var miss = [];
+      if (!val('epName')) miss.push('a reference');
+      if (!val('epPath')) miss.push('the path we publish');
+      if (!val('epUpPath')) miss.push('the supplier path');
+      return miss.length
+        ? { ok: false, why: 'Still needs ' + miss.join(', ') + '.' }
+        : { ok: true };
+    }
+    if (n === 3) {
+      if (S.mode === 'whitelist') {
+        var on = S.fields.filter(function (f) { return f.exposed; }).length;
+        return on ? { ok: true } : { ok: false, why: 'Tick at least one field — a ' +
+          'whitelist with none would hand the consumer an empty object.' };
+      }
+      return { ok: true };
+    }
+    return { ok: true };
+  }
+
+  function goToStep(n) {
+    if (n < 1) n = 1;
+    if (n > STEP_COUNT) n = STEP_COUNT;
+    S.step = n;
+    for (var i = 1; i <= STEP_COUNT; i++) {
+      var sec = $('step' + i);
+      if (sec) {
+        sec.classList.toggle('away', i !== n);
+        sec.classList.remove('collapsed');
+      }
+    }
+    paintWizard();
+    var head = $('wizpos');
+    if (head && head.scrollIntoView) head.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+
+  function paintWizard() {
+    var fill = $('wizfill');
+    if (fill) fill.style.width = Math.round((S.step / STEP_COUNT) * 100) + '%';
+    var pos = $('wizpos');
+    if (pos) pos.textContent = 'Step ' + S.step + ' of ' + STEP_COUNT;
+
+    Array.prototype.forEach.call(document.querySelectorAll('.rail li'), function (li) {
+      var n = Number(li.getAttribute('data-step'));
+      li.classList.toggle('active', n === S.step);
+      // Done means complete, not merely visited — the tick is a claim.
+      li.classList.toggle('done', n < S.step && stepReady(n).ok);
     });
+
+    for (var i = 1; i <= STEP_COUNT; i++) {
+      var btn = document.querySelector('#step' + i + ' .wiznext');
+      var why = $('wizwhy' + i);
+      if (!btn) continue;
+      var r = stepReady(i);
+      btn.disabled = !r.ok;
+      if (why) why.textContent = r.ok ? '' : r.why;
+    }
+  }
+
+  ['epName', 'epPath', 'epUpPath'].forEach(function (id) {
+    var n = $(id);
+    if (n) n.addEventListener('input', paintWizard);
+  });
+
+  Array.prototype.forEach.call(document.querySelectorAll('.wiznext'), function (b) {
+    b.addEventListener('click', function () {
+      var to = Number(b.getAttribute('data-goto'));
+      if (to > STEP_COUNT) return;            // "Done" on the last step
+      goToStep(to);
+    });
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('.wizback'), function (b) {
+    b.addEventListener('click', function () { goToStep(Number(b.getAttribute('data-goto'))); });
   });
   Array.prototype.forEach.call(document.querySelectorAll('.rail li'), function (li) {
     li.addEventListener('click', function () {
-      var s = $('step' + li.getAttribute('data-step'));
-      s.classList.remove('collapsed');
-      s.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      // Backwards is always allowed; forwards only as far as the work permits,
+      // so clicking step 4 from step 1 lands on the step actually blocking you.
+      var want = Number(li.getAttribute('data-step'));
+      var limit = 1;
+      while (limit < want && stepReady(limit).ok) limit++;
+      goToStep(want <= S.step ? want : limit);
     });
   });
 
@@ -404,6 +503,10 @@
       // and leaving it filled would suggest it could be read back.
       $('upAuthSecret').value = '';
       msg('s1msg', 'Saved. ' + (j.envHint || ''), false);
+      // Step 2 depends on a saved supplier, so the Continue button has to
+      // notice that it now exists. Without this the gate stays shut after the
+      // very action that opens it.
+      paintWizard();
       $('step1').classList.add('ok');
     }).catch(function (e) { msg('s1msg', e.message, true); })
       .then(function () { busy(btn, false); });
@@ -934,6 +1037,7 @@
         'supplier adds later arrives unticked, so it cannot leak by default.'
       : '';
     renderExclude();
+    paintWizard();
     $('step3').classList.toggle('ok', S.mode !== 'whitelist' || on > 0);
     var st = $('s3status');
     st.innerHTML = '';
@@ -1271,8 +1375,12 @@
     $('step1').classList.toggle('ok', !!(S.upstream && S.upstream.last_test_status &&
       S.upstream.last_test_status < 400));
     $('step2').classList.toggle('ok', !!(e && e.path));
-    // An endpoint that is already shaped does not need step 1 open.
-    $('step1').classList.toggle('collapsed', !!e);
+    // Open where the work is. Loading a half-built endpoint and landing on
+    // step 1 makes somebody click through screens they already finished; the
+    // first step that is NOT complete is the one they came back for.
+    var land = 1;
+    while (land < STEP_COUNT && stepReady(land).ok) land++;
+    goToStep(e ? land : 1);
     show($('s1box'), false);
     show($('s1res'), false);
     show($('s4split'), false);

@@ -18,6 +18,38 @@ const { esc, layout, pageHead } = require('./ui');
 
 const STUDIO_CSS = `
 .stu{display:grid;grid-template-columns:186px 1fr;gap:20px;align-items:start}
+/* ---------- the wizard ---------- */
+/* One step on screen at a time. The whole thing used to render as a single
+   1,900px page: every field of every step visible at once, mandatory and
+   optional indistinguishable, and the only way to know where you were was to
+   scroll. The four steps were already there — they were just all open. */
+.step.away{display:none}
+.wizhead{display:flex;align-items:center;gap:12px;margin-bottom:12px}
+.wizbar{flex:1;height:4px;background:var(--border);border-radius:2px;overflow:hidden}
+.wizbar i{display:block;height:100%;background:var(--gold);width:0;
+  transition:width .22s ease}
+.wizpos{font-size:11px;color:var(--ink3);font-weight:600;white-space:nowrap}
+.wiznav{display:flex;align-items:center;gap:10px;margin-top:18px;padding-top:14px;
+  border-top:1px solid var(--border)}
+.wiznav .wizback[data-goto="0"]{visibility:hidden}
+/* The reason the next step is not reachable yet, beside the button that is
+   refusing. A disabled control with no explanation is the thing people file
+   tickets about. */
+.wizwhy{font-size:11.5px;color:var(--ink3);line-height:1.45}
+.wiznext[disabled]{opacity:.45;cursor:not-allowed}
+
+/* ---------- optional, and why it is worth setting ---------- */
+.opt{margin-top:14px;border-top:1px dashed var(--border);padding-top:12px}
+.opt>summary{cursor:pointer;font-size:12px;font-weight:600;color:var(--ink2);
+  list-style:none;display:flex;align-items:center;gap:7px}
+.opt>summary::-webkit-details-marker{display:none}
+.opt>summary:before{content:"+";display:inline-flex;align-items:center;justify-content:center;
+  width:16px;height:16px;border:1px solid var(--border);border-radius:4px;font-weight:700;
+  color:var(--ink3);flex:none}
+.opt[open]>summary:before{content:"−"}
+.opt>summary em{font-style:normal;font-weight:400;color:var(--ink3);font-size:11.5px}
+.optwhy{margin:9px 0 2px;font-size:11.5px;color:var(--ink3);line-height:1.55;max-width:84ch}
+
 .rail{position:sticky;top:18px}
 .rail ol{list-style:none;margin:0;padding:0}
 .rail li{position:relative;padding:0 0 16px 28px;font-size:11.5px;color:var(--ink3);cursor:pointer}
@@ -217,6 +249,10 @@ function render({ admin, bootstrap, flash }) {
   </aside>
 
   <div>
+    <div class="wizhead">
+      <div class="wizbar"><i id="wizfill"></i></div>
+      <span class="wizpos" id="wizpos"></span>
+    </div>
     <!-- ================= STEP 1 ================= -->
     <section class="step" id="step1">
       <div class="sh" data-toggle="step1">
@@ -232,15 +268,9 @@ function render({ admin, bootstrap, flash }) {
           <div class="f"><label for="upName">Reference</label>
             <input id="upName" placeholder="cmots" spellcheck="false">
             <p class="hint">Lowercase, no spaces. Used in config, never shown to a consumer.</p></div>
-          <div class="f"><label for="upDisplay">Display name</label>
-            <input id="upDisplay" placeholder="CMOTS Stock APIs"></div>
-          <div class="f"><label for="upVendor">Supplied by</label>
-            <input id="upVendor" placeholder="Capital Market Online"></div>
           <div class="f" style="grid-column:span 2"><label for="upBase">Base URL</label>
             <input id="upBase" placeholder="https://supplier.example.com" spellcheck="false">
             <p class="hint">Scheme and host only. The per-endpoint path comes in step 2.</p></div>
-          <div class="f"><label for="upTimeout">Timeout (ms)</label>
-            <input id="upTimeout" type="number" min="100" max="120000" value="15000"></div>
           <div class="f"><label for="upAuthType">Authentication</label>
             <select id="upAuthType">
               <option value="none">None</option>
@@ -272,6 +302,25 @@ function render({ admin, bootstrap, flash }) {
 
         <div class="flash err hidden" id="envWarn" style="margin:14px 0 0"></div>
 
+        <details class="opt">
+          <summary>Naming and limits <em>— optional, but three of these are worth a minute</em></summary>
+          <div class="fields" style="margin-top:12px">
+            <div class="f"><label for="upDisplay">Display name</label>
+              <input id="upDisplay" placeholder="CMOTS Stock APIs">
+              <p class="hint">What appears in the Catalogue, the Applications list and the
+                Postman collection. Without it everyone reads the lowercase reference.</p></div>
+            <div class="f"><label for="upVendor">Supplied by</label>
+              <input id="upVendor" placeholder="Capital Market Online">
+              <p class="hint">Who the company behind the API actually is — the thing nobody
+                can remember a year later when the contract comes up.</p></div>
+            <div class="f"><label for="upTimeout">Timeout (ms)</label>
+              <input id="upTimeout" type="number" min="100" max="120000" value="15000">
+              <p class="hint"><strong>Worth checking.</strong> A consumer's call fails at this
+                limit too. A large master list routinely needs 60000, and the default of
+                15000 is what makes it look as though the supplier is down.</p></div>
+          </div>
+        </details>
+
         <fieldset>
           <legend>Test the connection</legend>
           <div class="tools">
@@ -296,6 +345,11 @@ function render({ admin, bootstrap, flash }) {
           <button type="button" class="primary" id="btnSaveUp">Save supplier API</button>
           <p class="hint" id="s1msg">Nothing is called until you press the button above.</p>
         </div>
+        <div class="wiznav">
+          <button type="button" class="wizback" data-goto="0">Back</button>
+          <button type="button" class="primary wiznext" data-goto="2">Continue</button>
+          <span class="wizwhy" id="wizwhy1"></span>
+        </div>
       </div>
     </section>
 
@@ -311,10 +365,6 @@ function render({ admin, bootstrap, flash }) {
           <div class="f"><label for="epName">Reference</label>
             <input id="epName" placeholder="company_master" spellcheck="false">
             <p class="hint">Permanent. Becomes the scope <code id="scopePreview">ep:…</code>.</p></div>
-          <div class="f"><label for="epDisplay">Display name</label>
-            <input id="epDisplay" placeholder="Company Master"></div>
-          <div class="f"><label for="epType">Type</label><select id="epType"></select></div>
-          <div class="f"><label for="epCat">Category</label><select id="epCat"></select></div>
           <div class="f"><label for="epMethod">Method</label>
             <select id="epMethod"><option>GET</option><option>POST</option><option>PUT</option>
               <option>PATCH</option><option>DELETE</option></select></div>
@@ -326,13 +376,33 @@ function render({ admin, bootstrap, flash }) {
             <input id="epUpPath" placeholder="/Market/api/CompanyMaster/:co_code"
                    spellcheck="false" style="font-family:var(--mono)">
             <p class="hint">Where we forward it. Same <code>:name</code> parameters.</p></div>
-          <div class="f"><label for="epRateMax">Rate limit (calls)</label>
-            <input id="epRateMax" type="number" min="1" value="60"></div>
-          <div class="f"><label for="epRateWin">per window (ms)</label>
-            <input id="epRateWin" type="number" min="1000" value="60000"></div>
-          <div class="f" style="grid-column:span 2"><label for="epDesc">Description</label>
-            <input id="epDesc" placeholder="Shown in the vendor-facing API documentation"></div>
         </div>
+
+        <details class="opt">
+          <summary>Naming, grouping and limits <em>— optional; the rate limit protects the supplier</em></summary>
+          <div class="fields" style="margin-top:12px">
+            <div class="f"><label for="epDisplay">Display name</label>
+              <input id="epDisplay" placeholder="Company Master">
+              <p class="hint">The human name in the Catalogue and in the documentation a
+                partner reads. The reference is for config; this is for people.</p></div>
+            <div class="f" style="grid-column:span 2"><label for="epDesc">Description</label>
+              <input id="epDesc" placeholder="Shown in the vendor-facing API documentation">
+              <p class="hint">Goes straight into the partner-facing docs. Written now it takes
+                a sentence; written later it is a meeting.</p></div>
+            <div class="f"><label for="epType">Type</label><select id="epType"></select>
+              <p class="hint">Groups the endpoint in the Catalogue filters.</p></div>
+            <div class="f"><label for="epCat">Category</label><select id="epCat"></select>
+              <p class="hint">The second filter consumers and admins browse by.</p></div>
+            <div class="f"><label for="epRateMax">Rate limit (calls)</label>
+              <input id="epRateMax" type="number" min="1" value="60">
+              <p class="hint"><strong>Worth setting.</strong> This is what stops one consumer's
+                retry loop from taking the supplier down for everybody else.</p></div>
+            <div class="f"><label for="epRateWin">per window (ms)</label>
+              <input id="epRateWin" type="number" min="1000" value="60000">
+              <p class="hint">The window the count above applies to. 60 per 60000 ms is one
+                call a second on average.</p></div>
+          </div>
+        </details>
 
         <!-- ------------------------------------------------------------
              Which credential THIS endpoint calls with.
@@ -392,6 +462,11 @@ function render({ admin, bootstrap, flash }) {
         </fieldset>
 
         <div class="err-inline hidden" id="s2err"></div>
+        <div class="wiznav">
+          <button type="button" class="wizback" data-goto="1">Back</button>
+          <button type="button" class="primary wiznext" data-goto="3">Continue</button>
+          <span class="wizwhy" id="wizwhy2"></span>
+        </div>
       </div>
     </section>
 
@@ -460,6 +535,11 @@ function render({ admin, bootstrap, flash }) {
             <tbody id="excludeRows"></tbody></table>
           </div>
         </fieldset>
+        <div class="wiznav">
+          <button type="button" class="wizback" data-goto="2">Back</button>
+          <button type="button" class="primary wiznext" data-goto="4">Continue</button>
+          <span class="wizwhy" id="wizwhy3"></span>
+        </div>
       </div>
     </section>
 
