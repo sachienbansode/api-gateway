@@ -8,7 +8,10 @@ const CONFIG_DIR = process.env.CONFIG_DIR || path.join(__dirname, '..', '..', 'c
 
 const VALID_METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
 const VALID_UPSTREAM_AUTH = new Set(['none', 'bearer', 'header', 'basic', 'query']);
-const VALID_RESPONSE_MODES = new Set(['whitelist', 'redact', 'passthrough']);
+// `text` is for suppliers that do not answer in JSON at all — SMS and payment
+// gateways with a status line, SOAP services with an envelope. Nothing can be
+// filtered out of those, so it carries the same acknowledgement as passthrough.
+const VALID_RESPONSE_MODES = new Set(['whitelist', 'redact', 'passthrough', 'text']);
 const VALID_IDEMPOTENCY = new Set(['required', 'optional', 'off']);
 
 class ConfigError extends Error {}
@@ -33,6 +36,79 @@ function interpolate(value, envName) {
     }
     return found;
   });
+}
+
+const VALID_PARAM_LOCATIONS = new Set(['path', 'query', 'header', 'body']);
+const VALID_PARAM_SOURCES = new Set(['vendor', 'fixed', 'env']);
+
+/**
+ * Validate the typed parameter list and resolve its values.
+ *
+ * A `fixed` parameter carries its value literally. An `env` parameter carries
+ * a ${VAR} reference resolved from the environment here, at load, so a missing
+ * variable is a startup failure with the endpoint's name in it rather than a
+ * request at 3am that silently sends the string "${ACL_PASSWORD}" to a
+ * supplier.
+ */
+function normaliseParams(list, at) {
+  if (list === undefined || list === null) return [];
+  if (!Array.isArray(list)) throw new ConfigError(`${at}: request.params must be a list`);
+
+  const out = [];
+  const seen = new Set();
+
+  for (const raw of list) {
+    const name = String(raw?.name || '').trim();
+    if (!name) throw new ConfigError(`${at}: every request parameter needs a name`);
+
+    const location = String(raw?.location || 'query').toLowerCase();
+    if (!VALID_PARAM_LOCATIONS.has(location)) {
+      throw new ConfigError(
+        `${at}: parameter "${name}" has location "${location}", not one of ` +
+          `${[...VALID_PARAM_LOCATIONS].join(', ')}`
+      );
+    }
+
+    const source = String(raw?.source || 'vendor').toLowerCase();
+    if (!VALID_PARAM_SOURCES.has(source)) {
+      throw new ConfigError(
+        `${at}: parameter "${name}" has source "${source}", not one of ` +
+          `${[...VALID_PARAM_SOURCES].join(', ')}`
+      );
+    }
+
+    // The same name twice in two places is not a configuration anyone means,
+    // and whichever one wins would be decided by list order.
+    const key = `${location}:${name}`;
+    if (seen.has(key)) {
+      throw new ConfigError(`${at}: parameter "${name}" is declared twice in the ${location}`);
+    }
+    seen.add(key);
+
+    let value = null;
+    if (source !== 'vendor') {
+      const rawValue = raw?.value !== undefined ? raw.value : raw?.fixedValue;
+      if (rawValue === undefined || rawValue === null || String(rawValue) === '') {
+        throw new ConfigError(
+          `${at}: parameter "${name}" has source "${source}" but no value. A parameter ` +
+            `the consumer cannot set, and that we do not set either, is never sent.`
+        );
+      }
+      value = interpolate(String(rawValue), `${at} parameter "${name}"`);
+    }
+
+    out.push({
+      name,
+      location,
+      source,
+      value,
+      // What the supplier calls it, when that differs from what we call it.
+      forwardAs: raw?.forwardAs ? String(raw.forwardAs) : null,
+      required: raw?.required !== false,
+    });
+  }
+
+  return out;
 }
 
 function deepInterpolate(node, where) {
@@ -287,6 +363,26 @@ function loadEndpoints(upstreams) {
     const exclude = ep.response?.exclude;
     const rename = ep.response?.rename || {};
 
+    if (mode === 'text') {
+      // Same bargain as passthrough: a status line cannot be filtered, so
+      // whatever the supplier says reaches the consumer. Demanding the
+      // acknowledgement here means it is a decision somebody made rather than
+      // a default somebody inherited.
+      if (ep.response?.acknowledgeUnfiltered !== true) {
+        throw new ConfigError(
+          `${at}: response.mode "text" forwards the supplier's body unfiltered, so it ` +
+            'needs response.acknowledgeUnfiltered: true. Nothing can be whitelisted out ' +
+            'of a response that is not JSON.'
+        );
+      }
+      if (Array.isArray(fields) && fields.length) {
+        throw new ConfigError(
+          `${at}: response.fields has no meaning for mode "text" — there are no fields ` +
+            'to pick from. Remove it, or use "whitelist" if the supplier does answer in JSON.'
+        );
+      }
+    }
+
     if (mode === 'whitelist') {
       if (!Array.isArray(fields) || fields.length === 0) {
         throw new ConfigError(
@@ -336,9 +432,47 @@ function loadEndpoints(upstreams) {
       }
     }
 
-    const inject = ep.request?.inject || {};
-    const queryAllow = Array.isArray(ep.request?.query) ? ep.request.query : [];
-    const bodyAllow = Array.isArray(ep.request?.body) ? ep.request.body : [];
+    // -------------------------------------------------------------------
+    // Request parameters.
+    //
+    // Two shapes arrive here and both have to work.
+    //
+    //   LEGACY (YAML, and everything published before this change)
+    //     request.query  allowlist of names the consumer may send as query
+    //     request.body   allowlist of names the consumer may send as body
+    //     request.inject fixed values, placed by METHOD — query on a GET,
+    //                    body on a POST
+    //
+    //   TYPED (what the Studio's parameter table has always collected)
+    //     request.params [{ name, location, source, value, forwardAs }]
+    //                    placed by LOCATION, independent of method
+    //
+    // The typed shape exists because the method is the wrong thing to decide
+    // placement on. ACL is a POST whose credentials belong in the query
+    // string; under the legacy rule an injected value on a POST can only go
+    // in the body, so that endpoint was not expressible at all.
+    //
+    // The legacy shape is NOT deprecated and nothing is migrated. It is
+    // derived from the typed one below, so the allowlist checks, the
+    // override check and the GET/body check all keep running exactly once,
+    // against one set of names, whichever shape came in.
+    // -------------------------------------------------------------------
+    const typed = normaliseParams(ep.request?.params, at);
+
+    const inject = { ...(ep.request?.inject || {}) };
+    const queryAllow = Array.isArray(ep.request?.query) ? [...ep.request.query] : [];
+    const bodyAllow = Array.isArray(ep.request?.body) ? [...ep.request.body] : [];
+
+    for (const p of typed) {
+      if (p.source === 'vendor') {
+        if (p.location === 'query' && !queryAllow.includes(p.name)) queryAllow.push(p.name);
+        if (p.location === 'body' && !bodyAllow.includes(p.name)) bodyAllow.push(p.name);
+      } else if (p.location !== 'path') {
+        // Path values are substituted into the URL by buildUpstreamPath, not
+        // appended as a parameter, so they are deliberately not injected.
+        inject[p.name] = p.value;
+      }
+    }
 
     // An injected value the vendor can also send would let them override it.
     for (const k of Object.keys(inject)) {
@@ -402,12 +536,20 @@ function loadEndpoints(upstreams) {
         windowMs: Number(ep.rateLimit?.windowMs) || 60000,
         max: Number(ep.rateLimit?.max) || 60,
       },
-      request: { query: queryAllow, body: bodyAllow, inject },
+      // `params` is the authoritative list when present; query/body/inject are
+      // kept alongside it so everything that already reads them — the manifest,
+      // the vendor-facing documentation, the override check — is unchanged.
+      request: { query: queryAllow, body: bodyAllow, inject, params: typed },
       response: {
         mode,
         fields: Array.isArray(fields) ? fields : [],
         exclude: Array.isArray(exclude) ? exclude : [],
         rename,
+        // text mode only. `failureMatch` is how a supplier that answers HTTP
+        // 200 with "ERROR|INVALID_NUMBER" gets reported as the failure it is.
+        failureMatch: mode === 'text' ? (ep.response?.failureMatch || null) : null,
+        contentType: mode === 'text'
+          ? (ep.response?.contentType || 'text/plain; charset=utf-8') : null,
       },
       // Discovery defaults ON for unfiltered modes, because that is exactly
       // where you need to know what is flowing through. Opt in elsewhere.

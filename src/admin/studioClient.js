@@ -854,8 +854,17 @@
     });
     show($('fsFields'), m === 'whitelist');
     show($('fsExclude'), m === 'redact');
+    // There is nothing to tick when the body is not JSON, and showing an empty
+    // field list next to a status line reads as a bug rather than a mode.
+    show($('fsText'), m === 'text');
     var warn = $('modeWarn');
-    if (m === 'passthrough') {
+    if (m === 'text') {
+      warn.textContent = 'The supplier’s reply is forwarded exactly as it arrives, because a ' +
+        'status line has no fields to filter. Pick this when the reply looks like ' +
+        '1701|9199…|OK rather than { }. If you leave the failure match blank, a send that ' +
+        'the supplier rejected inside a 200 will be recorded here as a success.';
+      show(warn, true);
+    } else if (m === 'passthrough') {
       warn.textContent = 'Passthrough forwards the supplier’s body exactly as it arrives. ' +
         'Anything they add later — a PAN, an internal cost — reaches the consumer the day they add it. ' +
         'Publishing records that you chose this.';
@@ -1229,6 +1238,11 @@
       responseExclude: S.mode === 'redact'
         ? S.fields.filter(function (f) { return !f.exposed; }).map(function (f) { return f.path; })
         : [],
+      // Sent as null outside text mode, so a value typed and then abandoned by
+      // switching mode does not sit in the database looking as though it does
+      // something. The column has a CHECK saying the same thing.
+      responseFailureMatch: S.mode === 'text' ? ($('epTextFail').value.trim() || null) : null,
+      responseContentType: S.mode === 'text' ? ($('epTextCt').value.trim() || null) : null,
       rateMax: Number($('epRateMax').value) || 60,
       rateWindowMs: Number($('epRateWin').value) || 60000,
       authMode: epAuthMode(),
@@ -1378,6 +1392,8 @@
     S.params = e ? (e.params || []).map(function (p) { return Object.assign({}, p); }) : [];
     S.fields = e ? (e.fields || []).map(function (f) { return Object.assign({}, f); }) : [];
     S.mode = e ? e.response_mode : 'whitelist';
+    $('epTextFail').value = e && e.text_failure_match ? e.text_failure_match : '';
+    $('epTextCt').value = e && e.text_content_type ? e.text_content_type : '';
     S.dirty = false;
     if (e) {
       S.app = e.application || S.app;

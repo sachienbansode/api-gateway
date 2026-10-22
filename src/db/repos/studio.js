@@ -231,12 +231,14 @@ async function saveEndpoint(row, actor) {
       `INSERT INTO gateway.endpoints
          (name, application, display_name, category, api_type, description, method, path,
           upstream, upstream_path, upstream_method, response_mode, response_exclude,
-          acknowledge_unfiltered, request_query, request_body, rate_window_ms, rate_max,
+          acknowledge_unfiltered, text_failure_match, text_content_type,
+          request_query, request_body, rate_window_ms, rate_max,
           idempotency, frequency, refresh_at, sample_path, status, enabled, notes, updated_by,
           auth_mode, auth_type, auth_name)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,
-               COALESCE($23,'draft'),$24,$25,$26,
-               COALESCE($27,'inherit'),$28,$29)
+               $23,$24,
+               COALESCE($25,'draft'),$26,$27,$28,
+               COALESCE($29,'inherit'),$30,$31)
        ON CONFLICT (name) DO UPDATE SET
          application=EXCLUDED.application, display_name=EXCLUDED.display_name,
          category=EXCLUDED.category, api_type=EXCLUDED.api_type,
@@ -245,6 +247,8 @@ async function saveEndpoint(row, actor) {
          upstream_method=EXCLUDED.upstream_method, response_mode=EXCLUDED.response_mode,
          response_exclude=EXCLUDED.response_exclude,
          acknowledge_unfiltered=EXCLUDED.acknowledge_unfiltered,
+         text_failure_match=EXCLUDED.text_failure_match,
+         text_content_type=EXCLUDED.text_content_type,
          request_query=EXCLUDED.request_query, request_body=EXCLUDED.request_body,
          rate_window_ms=EXCLUDED.rate_window_ms, rate_max=EXCLUDED.rate_max,
          idempotency=EXCLUDED.idempotency, frequency=EXCLUDED.frequency,
@@ -258,7 +262,13 @@ async function saveEndpoint(row, actor) {
         row.name, row.application || null, row.displayName || null, row.category || null,
         row.apiType || null, row.description || null, row.method || 'GET', row.path,
         row.upstream, row.upstreamPath, row.upstreamMethod || null, mode,
-        row.responseExclude || [], mode === 'passthrough', row.requestQuery || [],
+        row.responseExclude || [],
+        // Both unfiltered modes carry the acknowledgement; the CHECK in
+        // migration 018 rejects a text endpoint without it.
+        mode === 'passthrough' || mode === 'text',
+        mode === 'text' ? (row.responseFailureMatch || null) : null,
+        mode === 'text' ? (row.responseContentType || null) : null,
+        row.requestQuery || [],
         row.requestBody || [], row.rateWindowMs || 60000, row.rateMax || 60,
         row.idempotency || null, row.frequency || null, row.refreshAt || null,
         row.samplePath || null, row.status || null, row.enabled !== false,

@@ -137,11 +137,47 @@ class UpstreamClient {
       else url.searchParams.set(key, String(v));
     }
 
+    // -------------------------------------------------------------------
     // Forced values. Set last so they win over anything above.
-    for (const [k, v] of Object.entries(endpoint.request.inject)) {
-      if (endpoint.method === 'GET' || endpoint.method === 'DELETE') {
-        url.searchParams.set(k, String(v));
+    //
+    // Where they go depends on how the endpoint was configured.
+    //
+    //   typed     by the parameter's own location. A POST may carry a forced
+    //             value in the query string, which is how ACL and most of the
+    //             pre-JSON suppliers take their credentials.
+    //   legacy    by method, as before — query on GET/DELETE, body otherwise.
+    //
+    // Both branches still read from `request.inject`, so there is one source
+    // of forced values and no way for the two to disagree about what is being
+    // sent; the typed list only decides placement.
+    // -------------------------------------------------------------------
+    const typedParams = endpoint.request.params || [];
+    const headerInjections = {};
+
+    if (typedParams.length) {
+      for (const p of typedParams) {
+        if (p.source === 'vendor' || p.location === 'path') continue;
+        const name = p.forwardAs || p.name;
+        const v = endpoint.request.inject[p.name];
+        if (v === undefined) continue;
+        if (p.location === 'query') url.searchParams.set(name, String(v));
+        else if (p.location === 'header') headerInjections[name] = String(v);
       }
+    } else {
+      for (const [k, v] of Object.entries(endpoint.request.inject)) {
+        if (endpoint.method === 'GET' || endpoint.method === 'DELETE') {
+          url.searchParams.set(k, String(v));
+        }
+      }
+    }
+
+    // Vendor-supplied query parameters the supplier knows under another name.
+    for (const p of typedParams) {
+      if (p.source !== 'vendor' || p.location !== 'query' || !p.forwardAs) continue;
+      const v = query[p.name];
+      if (v === undefined) continue;
+      url.searchParams.delete(p.name);
+      url.searchParams.set(p.forwardAs, String(v));
     }
 
     // Our own credential as a query param, if that is the scheme. Set after
@@ -159,7 +195,18 @@ class UpstreamClient {
       for (const key of endpoint.request.body) {
         if (body && Object.prototype.hasOwnProperty.call(body, key)) payload[key] = body[key];
       }
-      Object.assign(payload, endpoint.request.inject);
+      if (typedParams.length) {
+        // Only the ones that asked to be in the body. A credential configured
+        // as a query parameter must not also appear in the payload — that
+        // would put it somewhere the supplier never looks and the logs might.
+        for (const p of typedParams) {
+          if (p.source === 'vendor' || p.location !== 'body') continue;
+          const v = endpoint.request.inject[p.name];
+          if (v !== undefined) payload[p.forwardAs || p.name] = v;
+        }
+      } else {
+        Object.assign(payload, endpoint.request.inject);
+      }
     }
 
     const headers = buildUpstreamHeaders(upstream, {
@@ -167,6 +214,14 @@ class UpstreamClient {
       hasBody: payload !== undefined,
       auth,
     });
+
+    // Applied after, but the auth header is written back over anything that
+    // collides: a parameter named Authorization must not be able to displace
+    // our own credential.
+    for (const [k, v] of Object.entries(headerInjections)) {
+      if (k.toLowerCase() === 'authorization') continue;
+      headers[k] = v;
+    }
 
     const started = Date.now();
     let res;
@@ -227,6 +282,25 @@ class UpstreamClient {
     breaker.onSuccess();
 
     const text = await res.text();
+
+    // A supplier that never answers in JSON.
+    //
+    // Parsing here and throwing was a DOUBLE-SEND on any endpoint with a side
+    // effect: the SMS went out, the body came back as `1701|9199…|OK`, the
+    // parse failed, the error handler released the idempotency claim, the
+    // consumer got a 502 and retried — and a second message was sent. The
+    // call succeeded; only our reading of it failed.
+    if (endpoint.response?.mode === 'text') {
+      const failure = endpoint.response.failureMatch;
+      // These suppliers answer 200 and put the outcome in the body. Without
+      // this the gateway reports every send as a success and nobody finds out
+      // until a customer complains.
+      const failed = failure
+        ? text.toLowerCase().includes(String(failure).toLowerCase())
+        : false;
+      return { status: res.status, body: null, text, textFailed: failed, durationMs };
+    }
+
     let parsed = null;
     if (text) {
       try {

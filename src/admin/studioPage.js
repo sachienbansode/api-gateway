@@ -487,8 +487,33 @@ function render({ admin, bootstrap, flash }) {
               reach the consumer.</span></div>
           <div class="mode danger" data-mode="passthrough"><b>Passthrough</b>
             <span>Forward the supplier's body verbatim. Nothing is filtered.</span></div>
+          <div class="mode danger" data-mode="text"><b>Not JSON</b>
+            <span>The supplier answers with a status line, XML or CSV. Forwarded as it
+              arrives — there are no fields to filter.</span></div>
         </div>
         <div class="flash err hidden" id="modeWarn"></div>
+
+        <!--
+          Only for the text mode. The supplier answers HTTP 200 and puts the
+          outcome in the body, so without this every send is recorded as a
+          success and nobody finds out until a customer complains.
+        -->
+        <fieldset id="fsText" class="hidden">
+          <legend>How to tell a failure</legend>
+          <div class="grid2">
+            <label>Failure match
+              <input id="epTextFail" placeholder="ERROR">
+              <span class="n">If the supplier's reply contains this word, the call is recorded
+                as failed even though the status said 200. Plain text, not a pattern, and
+                case does not matter. Leave blank to trust the status code.</span>
+            </label>
+            <label>Content type
+              <input id="epTextCt" placeholder="text/plain; charset=utf-8">
+              <span class="n">What the consumer is told they are receiving. Use
+                <code>application/xml</code> for SOAP, <code>text/csv</code> for a file.</span>
+            </label>
+          </div>
+        </fieldset>
 
         <fieldset>
           <legend>Request parameters</legend>

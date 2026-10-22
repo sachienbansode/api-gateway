@@ -38,6 +38,17 @@ async function listEndpoints() {
            COALESCE((SELECT jsonb_object_agg(i.key, i.value)
                        FROM gateway.endpoint_inject i WHERE i.endpoint = e.name), '{}'::jsonb)
              AS inject,
+           -- The parameter table the Studio collects. Until now it was read
+           -- only by the console, so a fixed value typed into it never
+           -- reached the live call. It is part of the endpoint, so it is
+           -- loaded with the endpoint.
+           COALESCE((SELECT jsonb_agg(jsonb_build_object(
+                              'name', p.name, 'location', p.location,
+                              'source', p.source, 'value', p.fixed_value,
+                              'forwardAs', p.forward_as, 'required', p.required)
+                              ORDER BY p.sort_order, p.name)
+                       FROM gateway.endpoint_params p WHERE p.endpoint = e.name), '[]'::jsonb)
+             AS params,
            (SELECT count(*) FROM gateway.vendor_endpoints ve WHERE ve.endpoint = e.name)
              AS vendor_count
       FROM gateway.endpoints e
@@ -227,10 +238,20 @@ function endpointToManifest(row) {
       query: row.request_query || [],
       body: row.request_body || [],
       inject: row.inject || {},
+      // Validated and resolved by core/config, which also folds the vendor
+      // ones into the allowlists above. Passed through raw rather than
+      // pre-digested here, so there is one place that decides what a valid
+      // parameter is.
+      params: row.params || [],
     },
   };
   if (row.upstream_method) ep.upstreamMethod = row.upstream_method;
   if (row.response_mode === 'passthrough') ep.response.acknowledgeUnfiltered = true;
+  if (row.response_mode === 'text') {
+    ep.response.acknowledgeUnfiltered = true;
+    if (row.text_failure_match) ep.response.failureMatch = row.text_failure_match;
+    if (row.text_content_type) ep.response.contentType = row.text_content_type;
+  }
   if (row.idempotency) ep.idempotency = row.idempotency;
   else if (!isWrite) ep.idempotency = 'off';
 
@@ -388,15 +409,18 @@ async function upsertEndpoint(row, actor) {
     `INSERT INTO gateway.endpoints
        (name, method, path, upstream, upstream_path, upstream_method,
         response_mode, response_fields, response_exclude, acknowledge_unfiltered,
+        text_failure_match, text_content_type,
         request_query, request_body, rate_window_ms, rate_max, idempotency,
         enabled, notes, updated_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
      ON CONFLICT (name) DO UPDATE SET
        method=EXCLUDED.method, path=EXCLUDED.path, upstream=EXCLUDED.upstream,
        upstream_path=EXCLUDED.upstream_path, upstream_method=EXCLUDED.upstream_method,
        response_mode=EXCLUDED.response_mode, response_fields=EXCLUDED.response_fields,
        response_exclude=EXCLUDED.response_exclude,
        acknowledge_unfiltered=EXCLUDED.acknowledge_unfiltered,
+       text_failure_match=EXCLUDED.text_failure_match,
+       text_content_type=EXCLUDED.text_content_type,
        request_query=EXCLUDED.request_query, request_body=EXCLUDED.request_body,
        rate_window_ms=EXCLUDED.rate_window_ms, rate_max=EXCLUDED.rate_max,
        idempotency=EXCLUDED.idempotency, enabled=EXCLUDED.enabled, notes=EXCLUDED.notes,
@@ -406,7 +430,12 @@ async function upsertEndpoint(row, actor) {
       row.name, row.method || 'GET', row.path, row.upstream, row.upstreamPath,
       row.upstreamMethod || null, row.responseMode || 'whitelist',
       row.responseFields || [], row.responseExclude || [],
-      row.responseMode === 'passthrough',
+      // Both unfiltered modes carry the acknowledgement. The CHECK added in
+      // migration 018 rejects the row otherwise, so missing `text` here would
+      // have turned a save into a database error with no useful message.
+      row.responseMode === 'passthrough' || row.responseMode === 'text',
+      row.responseMode === 'text' ? (row.responseFailureMatch || null) : null,
+      row.responseMode === 'text' ? (row.responseContentType || null) : null,
       row.requestQuery || [], row.requestBody || [],
       row.rateWindowMs || 60000, row.rateMax || 60, row.idempotency || null,
       row.enabled !== false, row.notes || null, actor,

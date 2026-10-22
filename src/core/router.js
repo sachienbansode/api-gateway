@@ -103,6 +103,9 @@ function compileResponseHandler(endpoint, logger) {
   return (body) => pass(body);
 }
 
+/** 2xx, written once rather than repeated at each call site. */
+const res2xx = (status) => Number(status) >= 200 && Number(status) < 300;
+
 function buildRouter({ endpoints, client, logger, observer, audit }) {
   const router = express.Router();
 
@@ -122,12 +125,55 @@ function buildRouter({ endpoints, client, logger, observer, audit }) {
 
     const handler = async (req, res, next) => {
       try {
-        const { status, body, durationMs } = await client.call(endpoint, {
+        const { status, body, text, textFailed, durationMs } = await client.call(endpoint, {
           params: req.params,
           query: req.query,
           body: req.body,
           requestId: req.requestId,
         });
+
+        // A supplier that does not answer in JSON — a status line, an XML
+        // envelope. There are no fields to project, so the body is forwarded
+        // as it arrived, which is what the endpoint's acknowledgement agreed
+        // to. The call is NOT retried and NOT failed: it worked, and on a send
+        // endpoint a retry would send a second message.
+        if (endpoint.response.mode === 'text') {
+          const totalMsText = req.startedAt
+            ? Math.round(Number(process.hrtime.bigint() - req.startedAt) / 1e6)
+            : null;
+          // The supplier said 200 and then said ERROR in the body. Report the
+          // truth, and say plainly that the side effect may still have
+          // happened — "failed" on a send endpoint otherwise reads as "nothing
+          // happened", which is the one thing we cannot promise.
+          const outStatusText = (!res2xx(status) || textFailed) ? 502 : 200;
+
+          logger[outStatusText === 200 ? 'info' : 'warn'](
+            {
+              requestId: req.requestId, vendor: req.vendor.id, endpoint: endpoint.name,
+              method: req.method, status: outStatusText, mode: 'text',
+              upstream: endpoint.upstream, upstreamStatus: status,
+              matchedFailure: Boolean(textFailed), upstreamMs: durationMs, totalMs: totalMsText,
+            },
+            outStatusText === 200 ? 'ok' : 'upstream reported a failure in the response body'
+          );
+
+          audit?.record({
+            requestId: req.requestId, vendorId: req.vendor.id, endpoint: endpoint.name,
+            method: req.method, path: req.originalUrl?.split('?')[0],
+            status: outStatusText,
+            errorCode: outStatusText === 200 ? null : 'upstream_reported_failure',
+            upstream: endpoint.upstream, upstreamStatus: status, upstreamMs: durationMs,
+            totalMs: totalMsText, responseMode: 'text', clientIp: req.ip,
+            internalReason: textFailed
+              ? `the response body matched the failure text "${endpoint.response.failureMatch}"`
+              : null,
+          });
+
+          res.status(outStatusText)
+            .type(endpoint.response.contentType || 'text/plain; charset=utf-8')
+            .send(text == null ? '' : String(text));
+          return;
+        }
 
         // Record which field paths the upstream actually produced, before
         // filtering. Names only, never values.
