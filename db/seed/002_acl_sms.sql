@@ -27,6 +27,41 @@
 
 SET search_path TO gateway, public;
 
+-- ---------------------------------------------------------------------------
+-- 0. Is this route already taken?  (BEFORE the transaction)
+--
+-- endpoints_route_idx is UNIQUE on (method, path), because two endpoints
+-- answering the same route would make which one serves a request a matter of
+-- insert order. The INSERT below uses ON CONFLICT (name), which handles
+-- re-running this file — but NOT the case where a DIFFERENT endpoint already
+-- owns POST /v1/sms, typically a draft someone made in the Studio first.
+--
+-- Without this check that case surfaces as a raw 23505, which says what
+-- failed but not what to do about it. Silently taking over somebody else's
+-- route would be worse still, so this stops instead of resolving it.
+--
+-- IT RUNS BEFORE `BEGIN` ON PURPOSE. Raising inside the transaction aborts
+-- it, and pgAdmin keeps that connection — so every statement you ran next,
+-- including an innocent SELECT, answered 25P02 and looked like a second
+-- failure. A read-only check has no business inside the write transaction.
+-- ---------------------------------------------------------------------------
+DO $$
+DECLARE
+  other TEXT;
+BEGIN
+  SELECT name INTO other FROM endpoints
+   WHERE method = 'POST' AND path = '/v1/sms' AND name <> 'acl_send_sms';
+
+  IF other IS NOT NULL THEN
+    RAISE EXCEPTION
+      'POST /v1/sms is already served by the endpoint "%". This script will '
+      'not take over another endpoint''s route. Either delete that endpoint '
+      '(DELETE FROM gateway.endpoints WHERE name = ''%'';) if it was a draft, '
+      'or change the path in this file if both are meant to exist.',
+      other, other;
+  END IF;
+END $$;
+
 BEGIN;
 
 -- ---------------------------------------------------------------------------
@@ -72,36 +107,6 @@ ON CONFLICT (name) DO UPDATE SET
 --
 -- text_failure_match IS DELIBERATELY NULL — see the note at the bottom.
 -- ---------------------------------------------------------------------------
--- ---------------------------------------------------------------------------
--- 2a. Is this route already taken?
---
--- endpoints_route_idx is UNIQUE on (method, path), because two endpoints
--- answering the same route would make which one serves a request a matter of
--- insert order. The INSERT below uses ON CONFLICT (name), which handles
--- re-running this file — but NOT the case where a DIFFERENT endpoint already
--- owns POST /v1/sms, typically a draft someone made in the Studio first.
---
--- Without this check that case surfaces as a raw 23505 from inside a
--- multi-statement script, which says what failed but not what to do about it.
--- It is also the one case where guessing would be wrong: silently taking over
--- somebody else's route is worse than stopping.
--- ---------------------------------------------------------------------------
-DO $$
-DECLARE
-  other TEXT;
-BEGIN
-  SELECT name INTO other FROM endpoints
-   WHERE method = 'POST' AND path = '/v1/sms' AND name <> 'acl_send_sms';
-
-  IF other IS NOT NULL THEN
-    RAISE EXCEPTION
-      'POST /v1/sms is already served by the endpoint "%". This script will '
-      'not take over another endpoint''s route. Either delete that endpoint '
-      '(DELETE FROM gateway.endpoints WHERE name = ''%'';) if it was a draft, '
-      'or change the path in this file if both are meant to exist.',
-      other, other;
-  END IF;
-END $$;
 
 INSERT INTO endpoints (
     name, application, display_name, description,
