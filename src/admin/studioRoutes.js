@@ -8,6 +8,7 @@ const studio = require('../db/repos/studio');
 const secrets = require('../db/repos/secrets');
 const secretbox = require('../core/secretbox');
 const tester = require('./studioTester');
+const apiShape = require('./apiShape');
 const studioPage = require('./studioPage');
 
 /**
@@ -491,7 +492,17 @@ function json(logger, deps = {}) {
       // and so does `described` — path, type and one sample value per field.
       // The sample is what makes a hundred near-identical supplier field names
       // pickable; it is held in the page and never written anywhere.
-      res.json({ result, fields, described: result.body ? tester.describe(result.body) : [] });
+      const described = result.body ? tester.describe(result.body) : [];
+      res.json({
+        result, fields, described,
+        // What kind of API this is, worked out from the call that just
+        // happened rather than asked of somebody who has not read it yet.
+        shape: apiShape.classify(result, described, {
+          method: (req.body || {}).method || 'GET',
+          authType: upstream.authType,
+          timeoutMs: upstream.timeoutMs,
+        }),
+      });
     } catch (err) { fail(res, next)(err); }
   });
 

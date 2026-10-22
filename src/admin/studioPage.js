@@ -78,6 +78,20 @@ const STUDIO_CSS = `
 .fieldbox th{position:sticky;top:0;z-index:1}
 .fieldbox td{padding:5px 10px}
 .fieldbox tr.off td{opacity:.5}
+/* ---------- what kind of API this is ---------- */
+.shape{margin-top:10px;border:1px solid var(--border);border-radius:var(--r);
+  background:var(--surface2);padding:11px 13px}
+.shape-kind{font-size:12.5px;font-weight:600;color:var(--ink)}
+.shape-sum{font-size:11.5px;color:var(--ink3);margin-top:2px}
+.shape-f{display:block;font-size:11.5px;line-height:1.55;color:var(--ink2);
+  margin-top:9px;padding-left:11px;border-left:2px solid var(--border)}
+.shape-f b{display:block;color:var(--ink);font-weight:600}
+/* A blocker, something to decide, and something to know — distinguished by a
+   rail rather than by colouring the text, which would make a whole paragraph
+   red and unreadable. */
+.shape-f.stop{border-left-color:var(--red)}
+.shape-f.warn{border-left-color:#fab219}
+.shape-f.info{border-left-color:var(--border)}
 /* A group heading. Says the shared prefix once so every row below can show
    only the part that differs. */
 .fieldbox tr.grp td{background:var(--surface2);font-weight:600;color:var(--ink2);
@@ -270,6 +284,7 @@ function render({ admin, bootstrap, flash }) {
             without saving it — so you can find out whether a token works before it
             becomes the one this gateway sends. Leave it blank to test the saved one.</p>
           <div class="res hidden" id="s1res"></div>
+          <div class="shape hidden" id="s1shape"></div>
           <div class="jsonbox hidden" id="s1box">
             <div class="jh"><span>What the supplier returned</span>
               <span id="s1meta"></span></div>

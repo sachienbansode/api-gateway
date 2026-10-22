@@ -429,6 +429,7 @@
         res.appendChild(badge('info', j.fields.length + ' fields found'));
       }
       if (r.error) res.appendChild(el('span', { class: 'err-inline', text: r.error }));
+      renderShape(j.shape);
       if (r.body !== undefined && r.body !== null) {
         S.lastSample = r.body;
         S.discovered = j.fields || [];
@@ -808,6 +809,39 @@
     msg('paramMsg', added ? added + ' parameter(s) added from the paths.'
       : 'Every path parameter is already listed.', false);
   });
+
+  /**
+   * "What kind of API is this", under the step-1 result.
+   *
+   * Nothing here is a question. The classification comes from the call that
+   * just happened, because asking somebody to pick an API type before they
+   * have read the response produces an answer nothing later contradicts.
+   *
+   * Ordered stop, then warn, then info: the thing that blocks you is the
+   * thing you should read first, and on a long list nobody reaches the end.
+   */
+  function renderShape(shape) {
+    var box = $('s1shape');
+    if (!box) return;
+    box.innerHTML = '';
+    if (!shape) { show(box, false); return; }
+    show(box, true);
+
+    box.appendChild(el('div', { class: 'shape-kind', text: shape.kind || '' }));
+    if (shape.summary) box.appendChild(el('div', { class: 'shape-sum', text: shape.summary }));
+
+    var rank = { stop: 0, warn: 1, info: 2 };
+    var items = (shape.findings || []).slice().sort(function (a, b) {
+      return (rank[a.level] === undefined ? 3 : rank[a.level]) -
+             (rank[b.level] === undefined ? 3 : rank[b.level]);
+    });
+    items.forEach(function (f) {
+      var row = el('div', { class: 'shape-f ' + f.level });
+      row.appendChild(el('b', { text: f.title }));
+      row.appendChild(el('span', { text: f.text }));
+      box.appendChild(row);
+    });
+  }
 
   // --- response fields ---
   function renderFields() {
