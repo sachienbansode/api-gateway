@@ -1,6 +1,7 @@
 'use strict';
 
 const db = require('../pool');
+const secrets = require('./secrets');
 
 /**
  * Everything the API Studio reads and writes.
@@ -136,7 +137,32 @@ async function endpoint(name) {
       [name]
     ),
   ]);
-  return { ...e, params: params?.rows || [], fields: fields?.rows || [], tests: tests?.rows || [] };
+  // What the screen is told about a sealed parameter: that one is set, who
+  // set it and the last four characters — read from a view that selects no
+  // ciphertext column at all. The screen cannot leak what it was never sent.
+  const masked = await db.query(
+    `SELECT param, is_set, masked, set_at, set_by
+       FROM gateway.endpoint_param_credentials WHERE endpoint = $1`,
+    [name]
+  );
+  const byParam = new Map((masked?.rows || []).map((m) => [m.param, m]));
+
+  return {
+    ...e,
+    params: (params?.rows || []).map((p) => {
+      if (p.source !== 'secret') return p;
+      const m = byParam.get(p.name);
+      return {
+        ...p,
+        secret_set: Boolean(m && m.is_set),
+        secret_masked: (m && m.masked) || null,
+        secret_set_at: (m && m.set_at) || null,
+        secret_set_by: (m && m.set_by) || null,
+      };
+    }),
+    fields: fields?.rows || [],
+    tests: tests?.rows || [],
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -221,6 +247,35 @@ async function saveUpstream(row, actor) {
  * quietly stays exposed.
  */
 async function saveEndpoint(row, actor) {
+  const saved = await saveEndpointRow(row, actor);
+
+  // ---------------------------------------------------------------------
+  // Sealing happens AFTER the transaction, not inside it.
+  //
+  // endpoint_param_secrets has a composite foreign key to endpoint_params,
+  // and secrets.setForParam runs on its own pooled connection — so inside
+  // the transaction the parameter row it references is not yet visible and
+  // the insert fails on the key. Deleting a parameter cascades its sealed
+  // value away, which is the behaviour we want: a credential outliving the
+  // parameter it belonged to is a credential nobody is looking after.
+  //
+  // A plaintext reaches this function only on the request that sets it. An
+  // unchanged credential is posted as an empty string and left alone, which
+  // is why editing an endpoint does not require re-typing every password.
+  // ---------------------------------------------------------------------
+  for (const p of row.params || []) {
+    if (p.source !== 'secret') continue;
+    const typed = typeof p.plaintext === 'string' ? p.plaintext : '';
+    if (!typed) continue;
+    await secrets.setForParam({
+      endpoint: row.name, param: p.name, plaintext: typed, actor,
+    });
+  }
+
+  return saved;
+}
+
+async function saveEndpointRow(row, actor) {
   return db.transaction(async (client) => {
     const before =
       (await client.query(`SELECT * FROM gateway.endpoints WHERE name = $1`, [row.name]))
@@ -290,7 +345,11 @@ async function saveEndpoint(row, actor) {
           [
             row.name, p.name, p.location || 'query', p.source || 'vendor',
             p.forwardAs || null, p.dataType || 'string', p.required === true,
-            p.fixedValue || null, p.allowed || [], p.example || null,
+            // A sealed parameter stores NOTHING here. The database enforces
+            // the same thing (param_secret_has_no_plaintext), so forgetting
+            // this line is a failed write rather than a password in the clear.
+            p.source === 'secret' ? null : (p.fixedValue || null),
+            p.allowed || [], p.example || null,
             p.description || null, i,
           ]
         );

@@ -47,6 +47,18 @@ const SCOPES = {
     column: 'endpoint',
     aad: (subject, slot) => `endpoint:${subject}:${slot}`,
   },
+  // A credential that travels as an ordinary request parameter, because the
+  // supplier has no Authorization header to put one in — ACL, and most of the
+  // SMS and payment gateways that predate JSON. The subject is the endpoint
+  // and the slot is the parameter's name, so a sealed `Password` on one
+  // endpoint is a different row, with different AAD, from a `Password` on
+  // another: one cannot be copied over the other.
+  param: {
+    table: 'gateway.endpoint_param_secrets',
+    column: 'endpoint',
+    auditColumn: 'endpoint',
+    aad: (subject, slot) => `param:${subject}:${slot}`,
+  },
 };
 
 function scopeOf(name) {
@@ -252,6 +264,40 @@ async function statusForEndpoint(endpoint = null) {
   return r?.rows || [];
 }
 
+// ---------------------------------------------------------------------------
+// Parameter scope — a credential the supplier expects as a request parameter.
+// ---------------------------------------------------------------------------
+
+const setForParam = ({ endpoint, param, plaintext, actor }) =>
+  setIn('param', { subject: endpoint, slot: param, plaintext, actor });
+
+const clearForParam = ({ endpoint, param, actor }) =>
+  clearIn('param', { subject: endpoint, slot: param, actor });
+
+const resolveForParam = (endpoint, param) => resolveIn('param', endpoint, param);
+
+/** Every sealed parameter of one endpoint, as { name: plaintext }. */
+const resolveAllForParams = (endpoint) => resolveAllIn('param', endpoint);
+
+const revealForParam = ({ endpoint, param, actor, reason = null }) =>
+  revealIn('param', { subject: endpoint, slot: param, actor, reason });
+
+/**
+ * What a screen is allowed to know: set or not, by whom, when, last four.
+ *
+ * Reads the view, which selects no ciphertext column at all — so a screen
+ * built on this is structurally incapable of leaking one, rather than merely
+ * not leaking one today.
+ */
+async function statusForParams(endpoint = null) {
+  const r = await db.query(
+    `SELECT * FROM gateway.endpoint_param_credentials
+      WHERE ($1::text IS NULL OR endpoint = $1) ORDER BY endpoint, param`,
+    [endpoint]
+  );
+  return r?.rows || [];
+}
+
 /** Every endpoint of one upstream that carries its own credential. */
 async function endpointOverrides(upstream = null) {
   const r = await db.query(
@@ -271,8 +317,13 @@ async function auditStrict({
   scope = 'upstream', subject, slot, action, actor,
   keyId = null, hint = null, note = null, reason = null,
 }) {
-  const upstream = scope === 'upstream' ? subject : null;
-  const endpoint = scope === 'endpoint' ? subject : null;
+  // The audit table has one column per subject kind, and a parameter
+  // credential's subject is an endpoint. secret_audit_scope_chk requires one
+  // of them to be set, so a new scope that filled in neither would make every
+  // write to it fail — silently, because audit() swallows its errors.
+  const auditColumn = SCOPES[scope]?.auditColumn || scope;
+  const upstream = auditColumn === 'upstream' ? subject : null;
+  const endpoint = auditColumn === 'endpoint' ? subject : null;
   await db.query(
     `INSERT INTO gateway.secret_audit
        (upstream, endpoint, slot, action, actor, key_id, hint, note, reason)
@@ -348,6 +399,9 @@ module.exports = {
   // endpoint scope
   setForEndpoint, clearForEndpoint, resolveForEndpoint, resolveAllForEndpoint,
   revealForEndpoint, statusForEndpoint, endpointOverrides,
+  // parameter scope
+  setForParam, clearForParam, resolveForParam, resolveAllForParams,
+  revealForParam, statusForParams,
   // shared
   recentAudit, accessLog, rotateAll,
 };

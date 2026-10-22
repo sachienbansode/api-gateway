@@ -39,7 +39,11 @@ function interpolate(value, envName) {
 }
 
 const VALID_PARAM_LOCATIONS = new Set(['path', 'query', 'header', 'body']);
-const VALID_PARAM_SOURCES = new Set(['vendor', 'fixed', 'env']);
+// `secret` means the value is sealed in the database and is filled in after
+// validation by catalog.applyVaultSecrets, exactly as a vaulted upstream
+// credential is. It arrives here as the placeholder, never as a plaintext, so
+// no secret passes through this file — or through any string-rewriting step.
+const VALID_PARAM_SOURCES = new Set(['vendor', 'fixed', 'env', 'secret']);
 
 /**
  * Validate the typed parameter list and resolve its values.
@@ -94,7 +98,12 @@ function normaliseParams(list, at) {
             `the consumer cannot set, and that we do not set either, is never sent.`
         );
       }
-      value = interpolate(String(rawValue), `${at} parameter "${name}"`);
+      // A sealed value is a placeholder at this point. Running it through
+      // interpolate() would be harmless today and wrong the moment someone
+      // chooses a placeholder containing a ${...}.
+      value = source === 'secret'
+        ? String(rawValue)
+        : interpolate(String(rawValue), `${at} parameter "${name}"`);
     }
 
     out.push({

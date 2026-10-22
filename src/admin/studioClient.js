@@ -883,7 +883,8 @@
 
   // --- request parameters ---
   var LOCS = ['path', 'query', 'header', 'body'];
-  var SRCS = [['vendor', 'the consumer'], ['fixed', 'a fixed value'], ['env', 'a variable']];
+  var SRCS = [['vendor', 'the consumer'], ['fixed', 'a fixed value'], ['env', 'a variable'],
+    ['secret', 'a secret']];
   var TYPES = ['string', 'int', 'number', 'bool', 'date', 'enum'];
 
   function renderParams() {
@@ -899,8 +900,7 @@
       cb.checked = p.required !== false;
       cb.addEventListener('change', function () { p.required = cb.checked; S.dirty = true; });
       tr.appendChild(el('td', { style: 'text-align:center' }, [cb]));
-      tr.appendChild(el('td', {}, [input(p, p.source === 'vendor' ? 'example' : 'fixed_value',
-        p.source === 'vendor' ? '6' : '${TENANT_ID}')]));
+      tr.appendChild(el('td', {}, [valueCell(p)]));
       tr.appendChild(el('td', {}, [input(p, 'description', 'CMOTS company code')]));
       var x = el('button', { class: 'x', type: 'button', text: '×', title: 'Remove' });
       x.addEventListener('click', function () { S.params.splice(i, 1); renderParams(); renderTestParams(); });
@@ -912,6 +912,51 @@
         text: 'No parameters. Add one, or press "Read from the paths above".' })]));
     }
   }
+  /**
+   * The value column, which depends on where the value comes from.
+   *
+   * A secret is the only one that is write-once. After it is saved the server
+   * sends back the last four characters and nothing else — it has no way to
+   * send more, because the screen is fed from a view with no ciphertext column
+   * in it. So the cell shows the mask and a Replace button rather than an
+   * input that would sit there looking editable and empty.
+   *
+   * p.plaintext is set ONLY while someone is typing a new one, and is posted
+   * once. An untouched secret posts nothing, which is why editing an endpoint
+   * does not mean re-entering every password.
+   */
+  function valueCell(p) {
+    if (p.source !== 'secret') {
+      return input(p, p.source === 'vendor' ? 'example' : 'fixed_value',
+        p.source === 'vendor' ? '6' : '${TENANT_ID}');
+    }
+
+    if (p.secret_set && p.plaintext === undefined) {
+      var wrap = el('span', { class: 'secretcell' });
+      wrap.appendChild(el('code', { class: 'masked', text: p.secret_masked || '••••' }));
+      var b = el('button', { type: 'button', class: 'linky', text: 'Replace' });
+      b.addEventListener('click', function () {
+        p.plaintext = '';
+        S.dirty = true;
+        renderParams();
+      });
+      wrap.appendChild(b);
+      if (p.secret_set_by) {
+        wrap.appendChild(el('span', { class: 'n',
+          text: 'set by ' + p.secret_set_by }));
+      }
+      return wrap;
+    }
+
+    var n = el('input', {
+      type: 'password', value: p.plaintext || '',
+      placeholder: p.secret_set ? 'type the new one' : 'paste it once',
+    });
+    n.setAttribute('autocomplete', 'new-password');
+    n.addEventListener('input', function () { p.plaintext = n.value; S.dirty = true; });
+    return n;
+  }
+
   function input(obj, key, ph) {
     var n = el('input', { value: obj[key] || '', placeholder: ph || '' });
     n.addEventListener('input', function () {
@@ -1251,7 +1296,15 @@
       params: S.params.map(function (p) {
         return {
           name: p.name, location: p.location, source: p.source, dataType: p.data_type,
-          required: p.required !== false, fixedValue: p.fixed_value || null,
+          required: p.required !== false,
+          // A secret never travels in this field. The server blanks it too and
+          // the database has a CHECK saying the same, so three layers have to
+          // fail before a password reaches a plaintext column.
+          fixedValue: p.source === 'secret' ? null : (p.fixed_value || null),
+          // Present only while someone is typing a new one. An untouched
+          // secret posts nothing and is left exactly as it is.
+          plaintext: p.source === 'secret' && typeof p.plaintext === 'string' && p.plaintext
+            ? p.plaintext : undefined,
           allowed: p.allowed || [], example: p.example || null, description: p.description || null,
           forwardAs: p.forward_as || null
         };

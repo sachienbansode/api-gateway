@@ -95,6 +95,17 @@ const STUDIO_CSS = `
 .rowset .x:hover{color:var(--red);background:var(--red-lt)}
 .rowset tbody tr:hover td{background:var(--surface2)}
 
+/* A stored secret: the last four characters, and a way to replace it. There is
+   no editable field, because there is nothing to put in one — the screen is
+   fed from a view that selects no ciphertext column. */
+.secretcell{display:flex;align-items:center;gap:7px;flex-wrap:wrap;padding:4px 2px}
+.secretcell .masked{font-size:11.5px;letter-spacing:.08em;color:var(--ink2);
+  background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:2px 7px}
+.secretcell .n{font-size:10px;color:var(--ink3)}
+.rowset .linky{border:0;background:transparent;color:var(--blue);cursor:pointer;
+  font:inherit;font-size:11px;padding:0;text-decoration:underline}
+.rowset .linky:hover{color:var(--ink)}
+
 .modes{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
 .mode{flex:1;min-width:180px;border:1px solid var(--border);border-radius:var(--r);padding:10px 12px;
   cursor:pointer;background:var(--surface2)}

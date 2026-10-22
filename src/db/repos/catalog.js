@@ -216,6 +216,35 @@ async function applyVaultSecrets(cfg, scoped, logger) {
       );
     }
   }
+
+  // Sealed request parameters. Same rule as above: an endpoint whose
+  // credential cannot be read goes dark rather than calling the supplier
+  // without it. ACL answers a credential-less call with HTTP 200 and an error
+  // sentence, so "send it anyway and see" would look like a working endpoint
+  // producing failed sends.
+  for (const ep of cfg.endpoints || []) {
+    const sealed = (ep.request?.params || []).filter((p) => p.source === 'secret');
+    if (!sealed.length) continue;
+    try {
+      const values = await secretRepo.resolveAllForParams(ep.name);
+      for (const p of sealed) {
+        const value = values[p.name];
+        if (!value) throw new Error(`no value is stored for parameter "${p.name}"`);
+        p.value = value;
+        // `inject` is what the request path reads; `params` only decides
+        // placement. Both are updated so neither can be stale.
+        ep.request.inject[p.name] = value;
+      }
+    } catch (err) {
+      failed.push({ endpoint: ep.name, error: err.message });
+      cfg.endpoints = cfg.endpoints.filter((e) => e.name !== ep.name);
+      logger?.error?.(
+        { endpoint: ep.name, err: err.message },
+        'could not decrypt a parameter credential — the endpoint is not being served'
+      );
+    }
+  }
+
   return failed;
 }
 
@@ -242,7 +271,15 @@ function endpointToManifest(row) {
       // ones into the allowlists above. Passed through raw rather than
       // pre-digested here, so there is one place that decides what a valid
       // parameter is.
-      params: row.params || [],
+      //
+      // A sealed parameter carries the placeholder, never a plaintext. The
+      // real value is put in by applyVaultSecrets() after validation, so a
+      // credential never passes through the validator, the manifest, or any
+      // string-rewriting step — the same rule migration 004 set for upstream
+      // credentials, for the same reason.
+      params: (row.params || []).map((p) => (
+        p.source === 'secret' ? { ...p, value: VAULT_PLACEHOLDER } : p
+      )),
     },
   };
   if (row.upstream_method) ep.upstreamMethod = row.upstream_method;
