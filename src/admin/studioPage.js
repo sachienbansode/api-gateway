@@ -266,7 +266,7 @@ function render({ admin, bootstrap, flash }) {
             <select id="upSel"></select>
             <p class="hint">Pick one already onboarded, or add a new one.</p></div>
           <div class="f"><label for="upName">Reference</label>
-            <input id="upName" placeholder="cmots" spellcheck="false">
+            <input id="upName" placeholder="e.g. cmots" spellcheck="false">
             <p class="hint">Lowercase, no spaces. Used in config, never shown to a consumer.</p></div>
           <div class="f" style="grid-column:span 2"><label for="upBase">Base URL</label>
             <input id="upBase" placeholder="https://supplier.example.com" spellcheck="false">
@@ -306,11 +306,11 @@ function render({ admin, bootstrap, flash }) {
           <summary>Naming and limits <em>— optional, but three of these are worth a minute</em></summary>
           <div class="fields" style="margin-top:12px">
             <div class="f"><label for="upDisplay">Display name</label>
-              <input id="upDisplay" placeholder="CMOTS Stock APIs">
+              <input id="upDisplay" placeholder="e.g. CMOTS Stock APIs">
               <p class="hint">What appears in the Catalogue, the Applications list and the
                 Postman collection. Without it everyone reads the lowercase reference.</p></div>
             <div class="f"><label for="upVendor">Supplied by</label>
-              <input id="upVendor" placeholder="Capital Market Online">
+              <input id="upVendor" placeholder="e.g. Capital Market Online">
               <p class="hint">Who the company behind the API actually is — the thing nobody
                 can remember a year later when the contract comes up.</p></div>
             <div class="f"><label for="upTimeout">Timeout (ms)</label>
@@ -324,7 +324,7 @@ function render({ admin, bootstrap, flash }) {
         <fieldset>
           <legend>Test the connection</legend>
           <div class="tools">
-            <input type="search" id="testPath" placeholder="/Market/api/CompanyMaster"
+            <input type="search" id="testPath" placeholder="e.g. /Market/api/CompanyMaster"
                    spellcheck="false" style="font-family:var(--mono)">
             <button type="button" id="btnTestUp">Call the supplier</button>
             <button type="button" id="btnTestKey">Test this key</button>
@@ -363,17 +363,17 @@ function render({ admin, bootstrap, flash }) {
       <div class="sb">
         <div class="fields">
           <div class="f"><label for="epName">Reference</label>
-            <input id="epName" placeholder="company_master" spellcheck="false">
+            <input id="epName" placeholder="e.g. company_master" spellcheck="false">
             <p class="hint">Permanent. Becomes the scope <code id="scopePreview">ep:…</code>.</p></div>
           <div class="f"><label for="epMethod">Method</label>
             <select id="epMethod"><option>GET</option><option>POST</option><option>PUT</option>
               <option>PATCH</option><option>DELETE</option></select></div>
           <div class="f" style="grid-column:span 2"><label for="epPath">Our path</label>
-            <input id="epPath" placeholder="/v1/cmots/company-master/:co_code"
+            <input id="epPath" placeholder="e.g. /v1/cmots/company-master/:co_code"
                    spellcheck="false" style="font-family:var(--mono)">
             <p class="hint">What the consumer calls. <code>:name</code> marks a path parameter.</p></div>
           <div class="f" style="grid-column:span 2"><label for="epUpPath">Supplier path</label>
-            <input id="epUpPath" placeholder="/Market/api/CompanyMaster/:co_code"
+            <input id="epUpPath" placeholder="e.g. /Market/api/CompanyMaster/:co_code"
                    spellcheck="false" style="font-family:var(--mono)">
             <p class="hint">Where we forward it. Same <code>:name</code> parameters.</p></div>
         </div>
@@ -382,7 +382,7 @@ function render({ admin, bootstrap, flash }) {
           <summary>Naming, grouping and limits <em>— optional; the rate limit protects the supplier</em></summary>
           <div class="fields" style="margin-top:12px">
             <div class="f"><label for="epDisplay">Display name</label>
-              <input id="epDisplay" placeholder="Company Master">
+              <input id="epDisplay" placeholder="e.g. Company Master">
               <p class="hint">The human name in the Catalogue and in the documentation a
                 partner reads. The reference is for config; this is for people.</p></div>
             <div class="f" style="grid-column:span 2"><label for="epDesc">Description</label>

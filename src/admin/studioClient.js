@@ -312,7 +312,27 @@
     loadEndpoint(null);
     renderBar();
     renderDropdowns();
+    appExamples();
   });
+
+  /**
+   * Make the worked example follow the application you picked.
+   *
+   * Every placeholder in this form was CMOTS — invisible while onboarding
+   * CMOTS, and indistinguishable from a wrongly pre-filled form the moment
+   * you choose anything else. An application is one supplier now, so its own
+   * code and name are the example that belongs here.
+   */
+  function appExamples() {
+    var app = (boot.applications || []).filter(function (a) { return a.code === S.app; })[0];
+    if (!app) return;
+    var ref = $('upName');
+    var disp = $('upDisplay');
+    // Only the placeholder. Writing a VALUE would be the bug this is fixing —
+    // a field that looks filled in but was never decided.
+    if (ref) ref.placeholder = 'e.g. ' + app.code;
+    if (disp) disp.placeholder = 'e.g. ' + (app.name || app.code);
+  }
   $('epSel').addEventListener('change', function () {
     var want = this.value;
     var previous = S.endpointName;
