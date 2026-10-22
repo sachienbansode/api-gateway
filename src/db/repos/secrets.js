@@ -59,6 +59,16 @@ const SCOPES = {
     auditColumn: 'endpoint',
     aad: (subject, slot) => `param:${subject}:${slot}`,
   },
+  // The shared key a supplier signs its inbound calls with. This one is never
+  // sent anywhere — it is used to recompute a digest and compare — but it is
+  // held to exactly the same standard, because a leaked signing key lets
+  // anyone post whatever they like into the internal application.
+  webhook: {
+    table: 'gateway.webhook_secrets',
+    column: 'webhook',
+    auditColumn: 'webhook',
+    aad: (subject, slot) => `webhook:${subject}:${slot}`,
+  },
 };
 
 function scopeOf(name) {
@@ -298,6 +308,21 @@ async function statusForParams(endpoint = null) {
   return r?.rows || [];
 }
 
+// ---------------------------------------------------------------------------
+// Webhook scope — the key a supplier signs its inbound calls with.
+// ---------------------------------------------------------------------------
+
+const setForWebhook = ({ webhook, plaintext, actor }) =>
+  setIn('webhook', { subject: webhook, slot: 'value', plaintext, actor });
+
+const clearForWebhook = ({ webhook, actor }) =>
+  clearIn('webhook', { subject: webhook, slot: 'value', actor });
+
+const resolveForWebhook = (webhook) => resolveIn('webhook', webhook, 'value');
+
+const revealForWebhook = ({ webhook, actor, reason = null }) =>
+  revealIn('webhook', { subject: webhook, slot: 'value', actor, reason });
+
 /** Every endpoint of one upstream that carries its own credential. */
 async function endpointOverrides(upstream = null) {
   const r = await db.query(
@@ -324,11 +349,12 @@ async function auditStrict({
   const auditColumn = SCOPES[scope]?.auditColumn || scope;
   const upstream = auditColumn === 'upstream' ? subject : null;
   const endpoint = auditColumn === 'endpoint' ? subject : null;
+  const webhook = auditColumn === 'webhook' ? subject : null;
   await db.query(
     `INSERT INTO gateway.secret_audit
-       (upstream, endpoint, slot, action, actor, key_id, hint, note, reason)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-    [upstream, endpoint, slot, action, actor, keyId, hint || null, note, reason]
+       (upstream, endpoint, webhook, slot, action, actor, key_id, hint, note, reason)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+    [upstream, endpoint, webhook, slot, action, actor, keyId, hint || null, note, reason]
   );
 }
 
@@ -402,6 +428,8 @@ module.exports = {
   // parameter scope
   setForParam, clearForParam, resolveForParam, resolveAllForParams,
   revealForParam, statusForParams,
+  // webhook scope
+  setForWebhook, clearForWebhook, resolveForWebhook, revealForWebhook,
   // shared
   recentAudit, accessLog, rotateAll,
 };

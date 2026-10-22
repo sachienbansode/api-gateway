@@ -321,6 +321,11 @@ const ICON = {
   catalog:
     '<path d="M4 5h16v14H4z" opacity=".25"/><path d="M4 9h16M9 9v10"/>',
   activity: '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
+  // Webhooks: an arrow coming IN to a box, the opposite of everything else
+  // in this nav, which is the only thing about it worth signalling at a glance.
+  webhooks:
+    '<path d="M21 12H10" /><path d="m13 8-4 4 4 4"/>'
+    + '<path d="M7 4H4a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h3" opacity=".5"/>',
   // Applications: stacked plates, a master list of things each holding more.
   apps:
     '<path d="M3 7.5 12 3l9 4.5-9 4.5z"/><path d="M3 12l9 4.5 9-4.5"/>'
@@ -355,6 +360,11 @@ const TABS = [
   ['/admin', 'Overview', 'overview', 'LIVE'],
   ['/admin/studio', 'API Studio', 'studio', 'BUILD'],
   ['/admin/catalog', 'Catalogue', 'catalog', 'DATA'],
+  // The inbound direction. A sibling of the Catalogue rather than a child of
+  // it, because a webhook is not an endpoint anyone can call — it is an
+  // address a supplier posts to, and conflating the two is how somebody ends
+  // up looking for it under Endpoints for ten minutes.
+  ['/admin/webhooks', 'Webhooks', 'webhooks', 'INBOUND'],
   ['/admin/consumers', 'Consumers', 'consumers', 'MGMT'],
   ['/admin/endpoints', 'Endpoints', 'endpoints', 'CFG'],
   ['/admin/activity', 'Activity', 'activity', 'USAGE'],

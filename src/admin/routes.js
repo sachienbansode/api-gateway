@@ -21,6 +21,8 @@ const appRepo = require('../db/repos/applications');
 const ssoRepo = require('../db/repos/sso');
 const ssoProbe = require('./ssoProbe');
 const applicationsPage = require('./applicationsPage');
+const webhooksPage = require('./webhooksPage');
+const webhookRepo = require('../db/repos/webhooks');
 const onboardPage = require('./onboardPage');
 const auditRepo = require('../db/repos/audit');
 const quotaRepo = require('../db/repos/quota');
@@ -1199,6 +1201,131 @@ function buildAdminRouter(logger, deps = {}) {
   });
 
   router.get('/studio', studioRoutes.page(logger, { flashOf }));
+
+  // -------------------------------------------------------------------------
+  // Webhooks — the inbound direction.
+  //
+  // No delete route, by the standing rule. A webhook that stops being served
+  // is unticked, which makes its address answer 404 exactly as an unknown path
+  // does; the call history and the queue stay, which is what you want when
+  // somebody asks three weeks later whether it ever worked.
+  // -------------------------------------------------------------------------
+
+  const hookBack = (msg, kind = 'ok', at = '') =>
+    `/admin/webhooks${at}?${kind}=` + encodeURIComponent(msg);
+
+  /**
+   * The address the supplier is given. Taken from configuration rather than
+   * the request, because the console is usually reached by a hostname the
+   * outside world cannot resolve, and handing someone an internal address to
+   * configure at their end wastes a round trip with their support desk.
+   */
+  const publicBase = () =>
+    (process.env.GW_PUBLIC_URL || 'https://pravah.ashikagroup.com').replace(/\/+$/, '');
+
+  router.get('/webhooks', async (req, res, next) => {
+    try {
+      if (!db.isEnabled()) {
+        return res.type('html').send(webhooksPage.render({
+          admin: req.admin, flash: flashOf(req), hooks: [], calls: [], stuck: [],
+          publicBase: publicBase(),
+        }));
+      }
+      const [hooks, creds, calls, stuck] = await Promise.all([
+        webhookRepo.list(),
+        webhookRepo.credentialStatus(),
+        webhookRepo.recentCalls(null, 100),
+        webhookRepo.stuck(50),
+      ]);
+      const byName = new Map(creds.map((c) => [c.webhook, c]));
+      res.type('html').send(webhooksPage.render({
+        admin: req.admin, flash: flashOf(req), calls, stuck,
+        hooks: hooks.map((h) => ({ ...h, credential: byName.get(h.name) || {} })),
+        publicBase: publicBase(),
+      }));
+    } catch (err) { next(err); }
+  });
+
+  router.get('/webhooks/new', (req, res) => {
+    if (!req.admin.canEdit) return res.redirect(303, hookBack('Your role is read-only here.', 'err'));
+    res.type('html').send(webhooksPage.renderOne({
+      admin: req.admin, flash: flashOf(req), hook: null, publicBase: publicBase(),
+    }));
+  });
+
+  router.get('/webhooks/:name', async (req, res, next) => {
+    try {
+      const hook = await webhookRepo.byName(req.params.name);
+      if (!hook) return res.redirect(303, hookBack(`No webhook called "${req.params.name}".`, 'err'));
+      const [creds, calls] = await Promise.all([
+        webhookRepo.credentialStatus(hook.name),
+        webhookRepo.recentCalls(hook.name, 50),
+      ]);
+      res.type('html').send(webhooksPage.renderOne({
+        admin: req.admin, flash: flashOf(req), hook,
+        credential: creds[0] || {}, calls, publicBase: publicBase(),
+      }));
+    } catch (err) { next(err); }
+  });
+
+  const hookInput = (b) => ({
+    name: b.name,
+    displayName: b.displayName,
+    description: b.description,
+    path: b.path,
+    signatureScheme: b.signatureScheme,
+    signatureHeader: b.signatureHeader,
+    signatureMessage: b.signatureMessage,
+    forwardUrl: b.forwardUrl,
+    forwardTimeoutMs: Number(b.forwardTimeoutMs) || null,
+    forwardMaxAttempts: Number(b.forwardMaxAttempts) || null,
+    ipAllowlist: String(b.ipAllowlist || '')
+      .split(',').map((s) => s.trim()).filter(Boolean),
+    eventKeyField: b.eventKeyField,
+    eventVersionField: b.eventVersionField || 'updated_at',
+    // An unticked box sends nothing, so absence means draft.
+    status: b.live === '1' ? 'live' : 'draft',
+    enabled: true,
+    // Present only when somebody typed a new one. An empty field leaves the
+    // stored key exactly as it is, which is why editing a webhook does not
+    // mean re-entering the secret.
+    plaintext: typeof b.plaintext === 'string' && b.plaintext ? b.plaintext : null,
+  });
+
+  router.post('/webhooks', async (req, res) => {
+    if (!req.admin.canEdit) return res.redirect(303, hookBack('Your role is read-only here.', 'err'));
+    try {
+      const saved = await webhookRepo.save(hookInput(req.body || {}), req.admin.email);
+      logger.info({ actor: req.admin.email, webhook: saved.name }, 'webhook created');
+      res.redirect(303, `/admin/webhooks/${saved.name}?ok=` + encodeURIComponent(
+        'Created. Give the supplier the address above.'));
+    } catch (err) {
+      res.redirect(303, '/admin/webhooks/new?err=' + encodeURIComponent(err.message));
+    }
+  });
+
+  router.post('/webhooks/:name', async (req, res) => {
+    if (!req.admin.canEdit) return res.redirect(303, hookBack('Your role is read-only here.', 'err'));
+    try {
+      const body = { ...(req.body || {}), name: req.params.name };
+      await webhookRepo.save(hookInput(body), req.admin.email);
+      logger.info({ actor: req.admin.email, webhook: req.params.name }, 'webhook updated');
+      res.redirect(303, `/admin/webhooks/${req.params.name}?ok=` + encodeURIComponent('Saved.'));
+    } catch (err) {
+      res.redirect(303, `/admin/webhooks/${req.params.name}?err=` + encodeURIComponent(err.message));
+    }
+  });
+
+  router.post('/webhooks/delivery/:id/retry', async (req, res) => {
+    if (!req.admin.canEdit) return res.redirect(303, hookBack('Your role is read-only here.', 'err'));
+    try {
+      const ok = await webhookRepo.retry(req.params.id);
+      res.redirect(303, hookBack(ok ? 'Queued for another attempt.' : 'No such delivery.',
+        ok ? 'ok' : 'err'));
+    } catch (err) {
+      res.redirect(303, hookBack(err.message, 'err'));
+    }
+  });
 
   router.get('/me', (req, res) => {
     res.json({

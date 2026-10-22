@@ -154,6 +154,46 @@ function createApp({ logger, config } = {}) {
     logger.info({ path: '/admin' }, 'admin UI mounted');
   }
 
+  // Stopped in stop(), before the pool closes.
+  let webhookDeliverer = null;
+
+  // -------------------------------------------------------------------------
+  // Inbound webhooks — suppliers calling US.
+  //
+  // MOUNTED ABOVE THE AUTH MIDDLEWARE, DELIBERATELY. The caller is a supplier,
+  // not a vendor; it holds no API key and cannot be issued one. A signature
+  // over a shared secret is the authentication, which is why src/core/webhook.js
+  // is written the way it is.
+  //
+  // This is the only public surface in the gateway, so it is mounted on its own
+  // prefix rather than under /v1 — nothing here should ever be reachable by a
+  // path that looks like a vendor endpoint, and nothing under /v1 should ever
+  // be reachable without a key.
+  // -------------------------------------------------------------------------
+  if (db.isEnabled() && String(process.env.WEBHOOKS_ENABLED || 'true').toLowerCase() === 'true') {
+    const webhookRepo = require('./db/repos/webhooks');
+    const secretRepo = require('./db/repos/secrets');
+    const { buildWebhookRouter } = require('./core/webhookRouter');
+    const { buildDeliverer } = require('./core/webhookDelivery');
+
+    // Its own binding, not a field on `live`: `live` is declared further down
+    // and this block runs at createApp time, so touching it here is a
+    // temporal-dead-zone error — one that surfaces as the whole suite hanging
+    // rather than as a clear failure, because the before-hook dies holding
+    // open servers.
+    const deliverer = buildDeliverer({ repo: webhookRepo, logger });
+    deliverer.start();
+    webhookDeliverer = deliverer;
+
+    app.use('/hooks', buildWebhookRouter({
+      repo: webhookRepo,
+      secrets: secretRepo,
+      logger,
+      onAccepted: () => deliverer.nudge(),
+    }));
+    logger.info({ path: '/hooks' }, 'inbound webhooks mounted (public, signature-authenticated)');
+  }
+
   // -------------------------------------------------------------------------
   // Vendor-facing surface. Auth applies to everything below this line.
   // -------------------------------------------------------------------------
@@ -312,6 +352,11 @@ function createApp({ logger, config } = {}) {
   }
 
   async function stop() {
+    // First, and before the pool closes. The deliverer holds a client while a
+    // sweep is in flight, so leaving it running makes db.close() wait on a
+    // timer that is still scheduling more work — the process then hangs
+    // instead of exiting, which is exactly what it did.
+    webhookDeliverer?.stop();
     await vendorStore.stop();
     // Flush and persist discovery before the pool closes — it writes through it.
     await observer.stop();
