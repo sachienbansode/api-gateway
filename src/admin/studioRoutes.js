@@ -685,9 +685,75 @@ function json(logger, deps = {}) {
             'for it yet — save one in step 1 before testing',
         });
       }
+      // -------------------------------------------------------------------
+      // The configured parameters, which this test did not send at all.
+      //
+      // Until now step 4 called baseUrl + path with the auth scheme and
+      // nothing else. For a read endpoint whose parameters are all optional
+      // that is a reasonable smoke test. For anything that authenticates with
+      // ordinary request parameters — ACL, and most suppliers that predate
+      // JSON — it calls the endpoint with no credentials and no arguments,
+      // and the supplier answers with its "bad request" code. The screen then
+      // showed HTTP 200 and "passed", because the HTTP call itself worked.
+      //
+      // That is the worst kind of green: it tells you the host is reachable
+      // while implying the endpoint is configured.
+      //
+      // Sealed values are resolved here, in the request path, exactly as
+      // applyVaultSecrets does for a live call — never sent to the browser.
+      // -------------------------------------------------------------------
+      const testQuery = {};
+      const testHeaders = {};
+      const missingSecrets = [];
+      // Every sealed value used in this call, so it can be scrubbed from
+      // anything that leaves this function.
+      const secretValues = [];
+
+      for (const p of b.params || []) {
+        if (!p || !p.name) continue;
+        const wire = p.forwardAs || p.name;
+        let value;
+
+        if (p.source === 'vendor') {
+          value = (b.values || {})[p.name];
+        } else if (p.source === 'secret') {
+          value = b.endpoint
+            ? await secrets.resolveForParam(b.endpoint, p.name).catch(() => null)
+            : null;
+          if (!value) { missingSecrets.push(p.name); continue; }
+          secretValues.push(String(value));
+        } else if (p.source === 'env') {
+          const ref = String(p.fixedValue || '');
+          const m = /^\$\{([A-Z0-9_]+)\}$/.exec(ref);
+          value = m ? process.env[m[1]] : ref;
+          if (value === undefined) { missingSecrets.push(`${p.name} (${ref})`); continue; }
+        } else {
+          value = p.fixedValue;
+        }
+
+        if (value === undefined || value === null || value === '') continue;
+        if (p.location === 'header') testHeaders[wire] = String(value);
+        else if (p.location === 'query') testQuery[wire] = String(value);
+        // `path` values are already substituted by fillPath above, and a body
+        // parameter has no meaning on the GET this tester performs.
+      }
+
+      if (missingSecrets.length) {
+        return res.status(400).json({
+          error:
+            `no value is stored for ${missingSecrets.join(', ')}. A test without it ` +
+            `would call the supplier unauthenticated and come back with their ` +
+            `error code, which tells you nothing about this configuration. ` +
+            `Set it in step 3 first.`,
+        });
+      }
+
       const result = await tester.callUpstream({
         baseUrl: (b.upstream || {}).baseUrl,
         path: filled.path,
+        method: b.upstreamMethod || 'GET',
+        query: testQuery,
+        extraHeaders: testHeaders,
         timeoutMs: (b.upstream || {}).timeoutMs,
         secrets: sealed,
         upstream: override
@@ -707,6 +773,31 @@ function json(logger, deps = {}) {
           )
         : { ok: false, error: result.error || 'there is no body to project' };
       const exposedFields = projection.ok ? tester.discover(projection.result).length : 0;
+
+      // -------------------------------------------------------------------
+      // Scrub the sealed values out of everything that leaves here.
+      //
+      // `result.url` is the URL that was actually called, and now that the
+      // test sends the configured parameters that URL contains the password
+      // in its query string. It goes two places that matter: back to the
+      // browser, and into connection_tests.request_url, which is a plain
+      // column read by the Studio's history panel.
+      //
+      // So a credential sealed with AES-256-GCM would have been written to
+      // the database in clear text by the act of testing it. Caught by a test
+      // asserting the response body does not contain the password — which is
+      // the only kind of assertion that catches this, since every individual
+      // piece looked right.
+      // -------------------------------------------------------------------
+      const scrub = (text) => {
+        let out = String(text == null ? '' : text);
+        for (const v of secretValues) {
+          if (v) out = out.split(v).join('••••');
+        }
+        return out;
+      };
+      if (result.url) result.url = scrub(result.url);
+      if (result.error) result.error = scrub(result.error);
 
       await studio.recordTest({
         kind: 'endpoint',

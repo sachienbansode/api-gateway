@@ -122,7 +122,8 @@ function fillPath(template, values = {}) {
  * authenticated admin with edit rights reaches it, and every call is logged.
  */
 async function callUpstream({ baseUrl, path, query = {}, method = 'GET', body = null,
-                              upstream = {}, secrets = null, timeoutMs = 15000 }) {
+                              upstream = {}, secrets = null, timeoutMs = 15000,
+                              extraHeaders = {} }) {
   let url;
   try {
     url = new URL(String(path).replace(/^\/?/, '/'), baseUrl);
@@ -167,6 +168,11 @@ async function callUpstream({ baseUrl, path, query = {}, method = 'GET', body = 
       headers: {
         accept: 'application/json',
         'user-agent': 'api-gateway-studio/1.0',
+        // Configured header parameters first, so the auth scheme's own
+        // headers still win a collision — a parameter named Authorization
+        // must not be able to displace our credential, here or in the live
+        // request path.
+        ...extraHeaders,
         ...auth.headers,
         ...(body ? { 'content-type': 'application/json' } : {}),
       },

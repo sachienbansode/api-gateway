@@ -1231,6 +1231,22 @@
         return acc;
       }, {}),
       endpoint: S.ep && S.ep.name ? S.ep.name : null,
+      // The configured parameters, so the test calls the supplier the way the
+      // live request will. Without these it called the bare URL and reported
+      // whatever the supplier says to an empty request — green on the screen,
+      // meaningless in fact.
+      // The Studio has no upstream-method control yet, so use what was
+      // saved. ACL's listener is a GET sitting behind our POST.
+      upstreamMethod: (S.ep && S.ep.upstream_method) || 'GET',
+      params: S.params.filter(function (p) { return p.name; }).map(function (p) {
+        return {
+          name: p.name, location: p.location, source: p.source,
+          forwardAs: p.forward_as || null,
+          // Never the sealed value — the browser does not have it and must
+          // not. The server resolves it from the vault by endpoint and name.
+          fixedValue: p.source === 'secret' ? null : (p.fixed_value || null)
+        };
+      }),
       // So the final test exercises the credential the live call would use,
       // not the supplier-wide one this endpoint may have been moved off.
       authMode: epAuthMode(),
@@ -1238,26 +1254,73 @@
       authName: $('epAuthName').value.trim() || null
     }).then(function (j) {
       var r = j.result, res = $('s4res');
+      // A text endpoint has no fields, so every count here is zero and the
+      // whitelist language ("0 reach the consumer", "no field is ticked") is
+      // not just unhelpful, it reads as a failure on an endpoint that is
+      // working exactly as configured. What matters instead is the supplier's
+      // reply itself, and whether the failure word appears in it.
+      var isText = S.mode === 'text';
       res.innerHTML = '';
-      res.appendChild(badge(r.ok ? 'ok' : 'off', r.status ? 'HTTP ' + r.status : 'no answer'));
+      // r.ok means "answered AND parsed as JSON", which is false by
+      // definition for a text endpoint. Colour the status by the status.
+      var httpOk = isText ? (r.status >= 200 && r.status < 300) : r.ok;
+      res.appendChild(badge(httpOk ? 'ok' : 'off', r.status ? 'HTTP ' + r.status : 'no answer'));
       if (r.ms !== undefined) res.appendChild(badge('mute', r.ms + ' ms'));
-      if (j.upstreamFields !== undefined) {
+
+      var supplierText = (r.raw === undefined || r.raw === null) ? '' : String(r.raw);
+      var failWord = ($('epTextFail').value || '').trim();
+      var looksFailed = isText && failWord
+        && supplierText.toLowerCase().indexOf(failWord.toLowerCase()) !== -1;
+
+      if (isText) {
+        res.appendChild(badge('mute', 'not JSON — forwarded as it arrives'));
+        if (failWord) {
+          res.appendChild(badge(looksFailed ? 'off' : 'ok',
+            looksFailed ? 'the failure word is in this reply' : 'no failure word'));
+        } else {
+          res.appendChild(badge('warn', 'no failure word set'));
+        }
+      } else if (j.upstreamFields !== undefined) {
         res.appendChild(badge('mute', j.upstreamFields + ' fields from the supplier'));
         res.appendChild(badge(j.exposedFields ? 'info' : 'off', j.exposedFields + ' reach the consumer'));
         var held = j.upstreamFields - j.exposedFields;
         if (held > 0) res.appendChild(badge('ok', held + ' withheld'));
       }
+
       show($('s4split'), true);
-      $('s4raw').textContent = pretty(r.body);
-      $('s4upmeta').textContent = j.upstreamFields + ' fields';
-      $('s4proj').textContent = j.projection && j.projection.ok ? pretty(j.projection.result)
-        : (j.projection ? j.projection.error : '');
-      $('s4vmeta').textContent = j.exposedFields + ' fields';
+      if (isText) {
+        $('s4raw').textContent = supplierText || '(the supplier sent an empty body)';
+        $('s4upmeta').textContent = supplierText.length + ' characters';
+        $('s4proj').textContent = supplierText || '(nothing)';
+        $('s4vmeta').textContent = 'forwarded whole';
+      } else {
+        $('s4raw').textContent = pretty(r.body);
+        $('s4upmeta').textContent = j.upstreamFields + ' fields';
+        $('s4proj').textContent = j.projection && j.projection.ok ? pretty(j.projection.result)
+          : (j.projection ? j.projection.error : '');
+        $('s4vmeta').textContent = j.exposedFields + ' fields';
+      }
+
       if (r.error) { $('s4err').textContent = r.error; show($('s4err'), true); }
-      if (j.projection && !j.projection.ok) { $('s4err').textContent = j.projection.error; show($('s4err'), true); }
-      $('step4').classList.toggle('ok', !!(r.ok && j.projection && j.projection.ok));
+      if (!isText && j.projection && !j.projection.ok) {
+        $('s4err').textContent = j.projection.error; show($('s4err'), true);
+      }
+      if (isText && looksFailed) {
+        $('s4err').textContent = 'The supplier answered HTTP ' + r.status +
+          ' but its reply contains "' + failWord + '", so this send FAILED. ' +
+          'That is the whole point of the failure word — without it this would ' +
+          'have been recorded as a success.';
+        show($('s4err'), true);
+      }
+
+      // For a text endpoint "passed" means the call was made and the reply
+      // does not contain the failure word. A projection it never performs
+      // must not decide the verdict.
+      var passed = isText ? httpOk && !looksFailed
+                          : !!(r.ok && j.projection && j.projection.ok);
+      $('step4').classList.toggle('ok', passed);
       var st = $('s4status'); st.innerHTML = '';
-      st.appendChild(badge(r.ok ? 'ok' : 'off', r.ok ? 'passed' : 'failed'));
+      st.appendChild(badge(passed ? 'ok' : 'off', passed ? 'passed' : 'failed'));
     }).catch(function (e) {
       $('s4res').innerHTML = '';
       $('s4err').textContent = e.message; show($('s4err'), true);
