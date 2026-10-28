@@ -1331,7 +1331,12 @@
         $('s4vmeta').textContent = j.exposedFields + ' fields';
       }
 
-      if (r.error) { $('s4err').textContent = r.error; show($('s4err'), true); }
+      // "the body is not JSON" is a FAULT for a JSON endpoint and the entire
+      // point of a text one. Showing it in red under a text endpoint that
+      // worked contradicts the green badge beside it, and reads as though
+      // something needs fixing when nothing does.
+      var realError = r.error && !(isText && /not JSON/i.test(r.error)) ? r.error : null;
+      if (realError) { $('s4err').textContent = realError; show($('s4err'), true); }
       if (!isText && j.projection && !j.projection.ok) {
         $('s4err').textContent = j.projection.error; show($('s4err'), true);
       }
