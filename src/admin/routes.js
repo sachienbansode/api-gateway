@@ -173,8 +173,7 @@ function buildAdminRouter(logger, deps = {}) {
       title,
       brand: req.brand,
       notice: req.query.timeout
-        ? `You were signed out after ${session.idleMinutes()} ` +
-          `minute${session.idleMinutes() === 1 ? '' : 's'} without activity. ` +
+        ? `You were signed out after ${session.idleLabel()} without activity. ` +
           'Sign in again to carry on.'
         : '',
       next: safeNext(req.query.next),

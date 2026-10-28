@@ -22,7 +22,7 @@ const COOKIE = process.env.ADMIN_SESSION_COOKIE || 'gw_admin';
  * TWO clocks, because "session timeout" means two different things and a
  * console that implements only one of them is annoying or insecure.
  *
- *   IDLE (30 minutes).  Time since the last request. Resets every time you do
+ *   IDLE (4 hours).     Time since the last request. Resets every time you do
  *                       anything, so it only fires on a console left open and
  *                       forgotten — the laptop on a desk, the tab behind forty
  *                       others. This is the one people mean.
@@ -30,22 +30,49 @@ const COOKIE = process.env.ADMIN_SESSION_COOKIE || 'gw_admin';
  *   ABSOLUTE (8 hours). Wall-clock time since sign-in, which nothing resets.
  *                       Without it a session kept warm by a background tab, a
  *                       polling dashboard or an open browser lives forever, and
- *                       "30 minute timeout" protects nobody.
+ *                       the idle timeout protects nobody.
  *
- * The JWT's own `exp` carries the idle window, so a token that leaks is only
- * worth 30 minutes even to someone replaying it outside this process. The
+ * WHY FOUR HOURS RATHER THAN THIRTY MINUTES
+ *
+ * Onboarding an API is not a thirty-minute job. The Studio's four steps
+ * involve reading a supplier's PDF, chasing a credential, and waiting on
+ * somebody else — and being signed out mid-way loses the form. A timeout
+ * people work around by keeping a tab refreshing is worse than a longer one
+ * they do not notice.
+ *
+ * The ABSOLUTE ceiling is what actually bounds a stolen session, and it is
+ * unchanged at 8 hours: a laptop taken at lunchtime is signed out by evening
+ * whatever the idle window says.
+ *
+ * The JWT's own `exp` carries the idle window, so a token that leaks is worth
+ * the idle window and no more, even to someone replaying it outside this
+ * process. That is the cost of this change, stated plainly: a leaked token is
+ * now useful for up to four hours rather than thirty minutes. Set
+ * ADMIN_IDLE_MINUTES to tighten it. The
  * absolute deadline rides along as `gw_abs` and is carried forward unchanged
  * through every renewal — a sliding window that also slid the ceiling would be
  * no ceiling at all.
  */
 function idleMinutes() {
-  const n = Number(process.env.ADMIN_IDLE_MINUTES || 30);
-  return Number.isFinite(n) && n > 0 ? n : 30;
+  const n = Number(process.env.ADMIN_IDLE_MINUTES || 240);
+  return Number.isFinite(n) && n > 0 ? n : 240;
 }
 
 function hours() {
   const n = Number(process.env.ADMIN_SESSION_HOURS || 8);
   return Number.isFinite(n) && n > 0 ? n : 8;
+}
+
+/**
+ * The idle window in words, for the one sentence a person reads after being
+ * signed out. "240 minutes" is accurate and reads as a machine talking; the
+ * same number as "4 hours" is the one anybody would say out loud.
+ */
+function idleLabel() {
+  const m = idleMinutes();
+  if (m < 60 || m % 60 !== 0) return `${m} minute${m === 1 ? '' : 's'}`;
+  const h = m / 60;
+  return `${h} hour${h === 1 ? '' : 's'}`;
 }
 
 /** Seconds of the idle window — the token's own lifetime. */
@@ -214,6 +241,6 @@ function clearCookie(res, req) {
 }
 
 module.exports = {
-  COOKIE, hours, idleMinutes, idleSeconds, parse, cookieParser,
+  COOKIE, hours, idleMinutes, idleLabel, idleSeconds, parse, cookieParser,
   mint, renew, setCookie, clearCookie, isSecure,
 };

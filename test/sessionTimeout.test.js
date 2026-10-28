@@ -6,7 +6,7 @@
  * "Session timeout" means two things and a console that implements only one is
  * either annoying or insecure:
  *
- *   IDLE      time since the last request, reset by activity. The 30 minutes
+ *   IDLE      time since the last request, reset by activity. The 4 hours
  *             people actually mean.
  *   ABSOLUTE  wall clock since sign-in, reset by nothing. Without it a tab
  *             that polls — or a person who clicks something every 29 minutes —
@@ -49,11 +49,20 @@ describe('admin session timeout', () => {
   test('the token lives for the idle window and carries the absolute ceiling', () => {
     const c = read(session.mint({ id: 7, email: 'a@b.com' }));
     assert.strictEqual(c.exp - c.iat, 4,
-      'the JWT exp is the IDLE window — a leaked token is worth 30 minutes, not 8 hours');
+      'the JWT exp is the IDLE window — a leaked token is worth the idle window, not 8 hours');
     assert.strictEqual(c.gw_abs - c.iat, 10, 'and the ceiling rides along separately');
   });
 
-  test('defaults are 30 minutes idle, 8 hours absolute', () => {
+  test('defaults are 4 hours idle, 8 hours absolute', () => {
+    // The idle window was 30 minutes and is now 4 hours, because onboarding an
+    // API is not a 30-minute job: the Studio's steps involve reading a
+    // supplier's PDF, chasing a credential and waiting on somebody else, and
+    // being signed out mid-way loses the form.
+    //
+    // The ABSOLUTE ceiling is deliberately unchanged. It is the clock that
+    // actually bounds a stolen session — a laptop taken at lunchtime is
+    // signed out by evening regardless of the idle window — so the two are
+    // asserted separately rather than as one "timeout".
     const prevIdle = process.env.ADMIN_IDLE_MINUTES;
     const prevHours = process.env.ADMIN_SESSION_HOURS;
     delete process.env.ADMIN_IDLE_MINUTES;
@@ -61,11 +70,11 @@ describe('admin session timeout', () => {
     delete require.cache[require.resolve('../src/admin/session')];
     const fresh = require('../src/admin/session');
     try {
-      assert.strictEqual(fresh.idleMinutes(), 30);
-      assert.strictEqual(fresh.idleSeconds(), 1800);
-      assert.strictEqual(fresh.hours(), 8);
+      assert.strictEqual(fresh.idleMinutes(), 240);
+      assert.strictEqual(fresh.idleSeconds(), 14400);
+      assert.strictEqual(fresh.hours(), 8, 'the ceiling is unchanged');
       const c = read(fresh.mint({ id: 1, email: 'a@b.com' }));
-      assert.strictEqual(c.exp - c.iat, 1800);
+      assert.strictEqual(c.exp - c.iat, 14400);
       assert.strictEqual(c.gw_abs - c.iat, 8 * 3600);
     } finally {
       process.env.ADMIN_IDLE_MINUTES = prevIdle;
