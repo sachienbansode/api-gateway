@@ -156,6 +156,48 @@ describe('a credential that travels as a request parameter', { skip }, () => {
     } finally { process.env.GW_SECRET_KEY = saved; }
   });
 
+  test('a save that cannot seal REPORTS it, and stores nothing in the clear', async () => {
+    // The failure worth shouting about. Everything else about the endpoint
+    // looks finished, so a generic error implies nothing was saved — when in
+    // fact the endpoint IS saved and simply cannot call anybody.
+    const saved = process.env.GW_SECRET_KEY;
+    delete process.env.GW_SECRET_KEY;
+    try {
+      await assert.rejects(
+        () => studio.saveEndpoint({
+          name: 'tsec_nokey', application: 'tsec', method: 'POST', path: '/v1/tsec2',
+          upstream: 'tsec', upstreamPath: '/send', responseMode: 'text',
+          params: [{ name: 'pass', location: 'query', source: 'secret',
+            plaintext: 'would-be-lost' }],
+          status: 'draft', enabled: true,
+        }, 'a@b.c'),
+        (e) => {
+          assert.match(e.message, /was NOT stored/);
+          assert.match(e.message, /GW_SECRET_KEY/);
+          assert.strictEqual(e.credentialFailed, 'pass');
+          return true;
+        }
+      );
+      const row = await db.query(
+        `SELECT fixed_value FROM gateway.endpoint_params
+          WHERE endpoint = 'tsec_nokey' AND name = 'pass'`);
+      assert.strictEqual(row.rows[0]?.fixed_value ?? null, null,
+        'and nothing landed in the plaintext column');
+    } finally {
+      process.env.GW_SECRET_KEY = saved;
+      await db.query(`DELETE FROM gateway.endpoints WHERE name = 'tsec_nokey'`).catch(() => {});
+    }
+  });
+
+  test('a successful save reports the mask back to the screen', async () => {
+    // Without this the cell keeps showing an editable password box and there
+    // is no way to tell a stored credential from a lost one.
+    const ep = await studio.endpoint('tsec_send');
+    const pw = ep.params.find((p) => p.name === 'Password');
+    assert.strictEqual(pw.secret_set, true);
+    assert.match(pw.secret_masked, /^•+/);
+  });
+
   test('the password is not in a database dump — plain, base64 or hex', () => {
     const dump = execFileSync('pg_dump', ['--no-owner', process.env.TEST_DATABASE_URL],
       { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });

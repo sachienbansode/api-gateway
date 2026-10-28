@@ -1219,6 +1219,29 @@
     show($('s4res'), true);
     $('s4res').innerHTML = '';
     $('s4res').appendChild(el('span', { class: 'spin' }));
+    $('s4res').appendChild(el('span', { class: 'n', id: 's4probe',
+      text: 'checking whether the supplier is reachable…' }));
+
+    // Answer "can we even reach them" first, while the real call is still
+    // running. A TCP/TLS handshake comes back in milliseconds; the call
+    // itself can hang for the full timeout. When it does, this is the line
+    // that says whether the host is down or the endpoint is wrong — two
+    // problems that look identical from a request that never returns.
+    S.lastProbe = null;
+    api('/admin/api/probe', { baseUrl: collectUpstream().baseUrl })
+      .then(function (pr) {
+        S.lastProbe = pr;
+        var n = $('s4probe');
+        if (!n) return;
+        n.textContent = '';
+        n.appendChild(badge(pr.reachable ? 'ok' : 'off',
+          pr.reachable ? 'host reachable · ' + pr.ms + ' ms'
+                       : 'host NOT reachable' + (pr.why ? ' — ' + pr.why : '')));
+      })
+      .catch(function () {
+        var n = $('s4probe');
+        if (n) n.textContent = '';
+      });
     api('/admin/api/test-endpoint', {
       upstream: collectUpstream(),
       upstreamPath: $('epUpPath').value.trim(),
@@ -1266,6 +1289,13 @@
       var httpOk = isText ? (r.status >= 200 && r.status < 300) : r.ok;
       res.appendChild(badge(httpOk ? 'ok' : 'off', r.status ? 'HTTP ' + r.status : 'no answer'));
       if (r.ms !== undefined) res.appendChild(badge('mute', r.ms + ' ms'));
+      // Keep the reachability answer visible next to the result. On a
+      // failure it is the first thing anyone needs, and clearing it the
+      // moment the call lands throws away the more useful half.
+      if (S.lastProbe) {
+        res.appendChild(badge(S.lastProbe.reachable ? 'ok' : 'off',
+          S.lastProbe.reachable ? 'host reachable' : 'host NOT reachable'));
+      }
 
       var supplierText = (r.raw === undefined || r.raw === null) ? '' : String(r.raw);
       var failWord = ($('epTextFail').value || '').trim();
@@ -1391,6 +1421,20 @@
     return api('/admin/api/endpoint', row).then(function (j) {
       S.ep = j.endpoint;
       S.dirty = false;
+      // Re-read the parameters from what was actually stored.
+      //
+      // Without this a secret you just typed keeps showing as an editable
+      // password box, because `secret_set` is still whatever it was when the
+      // page loaded. There is then NO way to tell from the screen whether the
+      // password was stored or silently lost — which is exactly the position
+      // one of us was in for a day. After this it flips to ••••xxxx and a
+      // Replace link, which is a positive confirmation rather than an absence
+      // of error.
+      if (j.endpoint && j.endpoint.params) {
+        S.params = j.endpoint.params.map(function (q) { return Object.assign({}, q); });
+        renderParams();
+        renderTestParams();
+      }
       var i = -1;
       boot.endpoints.forEach(function (e, ix) { if (e.name === j.endpoint.name) i = ix; });
       var summary = j.summary || j.endpoint;

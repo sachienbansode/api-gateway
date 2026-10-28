@@ -267,9 +267,33 @@ async function saveEndpoint(row, actor) {
     if (p.source !== 'secret') continue;
     const typed = typeof p.plaintext === 'string' ? p.plaintext : '';
     if (!typed) continue;
-    await secrets.setForParam({
-      endpoint: row.name, param: p.name, plaintext: typed, actor,
-    });
+
+    try {
+      await secrets.setForParam({
+        endpoint: row.name, param: p.name, plaintext: typed, actor,
+      });
+      // Read it straight back. Sealing can succeed and still leave nothing
+      // usable — a key that encrypts but is not in the ring to decrypt with,
+      // a row written to a different slot than the one the request path
+      // looks in. Both produce an endpoint that saves cleanly and cannot
+      // call anybody, and the screen has no way to tell.
+      const back = await secrets.resolveForParam(row.name, p.name);
+      if (back !== typed) {
+        throw new Error('it was written but did not read back the same');
+      }
+    } catch (err) {
+      // The endpoint row is already committed, so say exactly that rather
+      // than letting a generic 500 imply nothing was saved. Losing a
+      // password silently is the failure worth shouting about: everything
+      // else about the endpoint will look finished.
+      const e = new Error(
+        `The endpoint was saved, but the "${p.name}" credential was NOT stored: ` +
+        `${err.message} — so this endpoint cannot call the supplier yet. ` +
+        `Nothing was written in plain text.`
+      );
+      e.credentialFailed = p.name;
+      throw e;
+    }
   }
 
   return saved;

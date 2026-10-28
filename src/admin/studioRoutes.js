@@ -659,6 +659,29 @@ function json(logger, deps = {}) {
     }
   });
 
+  // --- reachability --------------------------------------------------------
+  /**
+   * Can we open a connection to the supplier's host at all?
+   *
+   * A TCP/TLS handshake and nothing more — no HTTP request, so it is safe to
+   * run against an endpoint with a side effect and fast enough to answer
+   * while the real call is still in flight.
+   *
+   * It exists as its own route because "is the host reachable" and "does the
+   * endpoint work" are different questions with different fixes, and when the
+   * second one hangs the first is the one you actually want answered. A DNS
+   * failure, a firewall, an expired certificate and a wrong path all look
+   * identical from a request that never returns.
+   */
+  r.post('/probe', async (req, res, next) => {
+    try {
+      const baseUrl = (req.body || {}).baseUrl;
+      if (!baseUrl) return res.status(400).json({ error: 'no base URL to probe' });
+      const out = await tester.probeOrigin(baseUrl);
+      res.json(out);
+    } catch (err) { fail(res, next)(err); }
+  });
+
   // --- step 4 --------------------------------------------------------------
   r.post('/test-endpoint', async (req, res, next) => {
     try {
